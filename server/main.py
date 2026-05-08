@@ -5,7 +5,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from server.routers import approvals, drafts, health, posts, reports, settings, stats
+from server.routers import approvals, auth, drafts, health, posts, reports, settings, stats
 
 app = FastAPI(
     title="FB Engagement Assistant API",
@@ -24,6 +24,7 @@ app.add_middleware(
 )
 
 # Routers
+app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(posts.router, prefix="/api/v1", tags=["posts"])
 app.include_router(drafts.router, prefix="/api/v1", tags=["drafts"])
