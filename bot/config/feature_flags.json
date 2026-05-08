@@ -1,0 +1,6 @@
+{
+  "ai_draft_enabled": false,
+  "telegram_notifications": true,
+  "export_weekly_csv": true,
+  "auto_post_enabled": false
+}

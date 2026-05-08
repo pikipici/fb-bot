@@ -1,0 +1,21 @@
+{
+  "global": {
+    "max_requests_per_minute": 60,
+    "max_requests_per_hour": 1000
+  },
+  "per_target": {
+    "default": {
+      "max_requests_per_run": 50,
+      "min_interval_seconds": 30
+    },
+    "overrides": {}
+  },
+  "backoff": {
+    "on_captcha": {
+      "cooldown_minutes": 120
+    },
+    "on_rate_limit_signal": {
+      "cooldown_minutes": 60
+    }
+  }
+}

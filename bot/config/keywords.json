@@ -1,0 +1,15 @@
+{
+  "language": "id",
+  "whitelist": [
+    "cari jasa",
+    "butuh jasa",
+    "butuh desain",
+    "minta rekomendasi"
+  ],
+  "blacklist": [
+    "politik",
+    "sara",
+    "hoax",
+    "konten dewasa"
+  ]
+}

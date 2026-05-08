@@ -1,0 +1,15 @@
+{
+  "targets": [
+    {
+      "id": "fb_group_example",
+      "name": "Example Group",
+      "type": "group",
+      "url": "https://www.facebook.com/groups/example",
+      "mode": "scrape_public",
+      "priority": 10,
+      "cooldown_minutes": 30,
+      "max_posts_per_run": 50,
+      "enabled": true
+    }
+  ]
+}

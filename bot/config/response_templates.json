@@ -1,0 +1,34 @@
+{
+  "templates": {
+    "static": [
+      {
+        "id": "static_01",
+        "text": "Halo kak, semoga membantu ya. Kalau ada yang mau didiskusikan, boleh langsung chat aja.",
+        "category": "general",
+        "language": "id"
+      },
+      {
+        "id": "static_02",
+        "text": "Hi, feel free to reach out if you need more info. Happy to help!",
+        "category": "general",
+        "language": "en"
+      }
+    ],
+    "semi_dynamic": [
+      {
+        "id": "semi_01",
+        "trigger_keywords": ["cari jasa", "butuh jasa"],
+        "template": "Halo kak, kebetulan ada yang bisa bantu soal {{category}}. Kalau berkenan, boleh diskusi dulu.",
+        "category": "service_inquiry",
+        "language": "id"
+      },
+      {
+        "id": "semi_02",
+        "trigger_keywords": ["butuh desain", "minta rekomendasi"],
+        "template": "Hai kak, soal {{category}} mungkin bisa bantu kasih insight. Chat aja kalau mau tanya-tanya.",
+        "category": "design_inquiry",
+        "language": "id"
+      }
+    ]
+  }
+}

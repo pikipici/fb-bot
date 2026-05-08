@@ -1,0 +1,14 @@
+{
+  "weights": {
+    "engagement": 0.35,
+    "freshness": 0.30,
+    "relevance": 0.25,
+    "risk_penalty": -0.10
+  },
+  "thresholds": {
+    "queue_score_min": 0.5,
+    "min_engagement": 3,
+    "max_post_age_hours": 48
+  },
+  "engagement_normalization": "log"
+}

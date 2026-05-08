@@ -1,0 +1,11 @@
+"""Health check router."""
+
+from fastapi import APIRouter
+
+router = APIRouter()
+
+
+@router.get("/health")
+async def health_check():
+    """Basic health check endpoint."""
+    return {"status": "ok", "service": "fb-engagement-assistant"}
