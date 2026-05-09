@@ -99,3 +99,22 @@ class AuditLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=lambda: datetime.now(timezone.utc)
     )
+
+
+class FBAccount(Base):
+    __tablename__ = "fb_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    label: Mapped[str] = mapped_column(String(100), nullable=False)  # friendly name
+    email_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    password_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="ACTIVE")  # ACTIVE, COOLDOWN, BLOCKED, DISABLED
+    purpose: Mapped[str] = mapped_column(String(20), default="both")  # scrape, post, both
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    cooldown_until: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_uses: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=lambda: datetime.now(timezone.utc)
+    )
