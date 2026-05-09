@@ -67,7 +67,7 @@ class ScoringEngine:
             self.weights["engagement"] * engagement
             + self.weights["freshness"] * freshness
             + self.weights["relevance"] * relevance
-            + self.weights["risk_penalty"] * risk
+            + risk  # risk is already negative
         )
         return round(max(0.0, min(1.0, score)), 4)
 

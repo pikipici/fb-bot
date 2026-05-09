@@ -70,7 +70,7 @@ class TestRiskPenalty:
 
     def test_multiple_risk_tags(self, scorer):
         result = scorer.calculate_risk_penalty(["politik", "sara", "hoax"])
-        assert result == -0.9
+        assert result == pytest.approx(-0.9)
 
     def test_capped_at_minus_one(self, scorer):
         result = scorer.calculate_risk_penalty(["a", "b", "c", "d", "e"])
