@@ -1,0 +1,19 @@
+[Unit]
+Description=FB Bot Celery Worker
+After=network.target redis-server.service
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/fb-bot
+Environment=PATH=/home/ubuntu/fb-bot/venv/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=/home/ubuntu/fb-bot/.env
+ExecStart=/home/ubuntu/fb-bot/venv/bin/celery -A bot.celery_app worker --loglevel=info --concurrency=2
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
