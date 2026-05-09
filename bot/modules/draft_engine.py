@@ -1,17 +1,28 @@
 """Draft Response Engine — generates draft comments with fallback chain."""
 
+import asyncio
 import hashlib
 import json
+import logging
 import random
 import re
 from pathlib import Path
 from typing import Any
 
+from bot.modules.ai_generator import AIGenerator
+
+logger = logging.getLogger(__name__)
+
 
 class DraftEngine:
     """Generate draft responses with fallback: AI -> semi-dynamic -> static."""
 
-    def __init__(self, templates_path: str | None = None, ai_prompts_path: str | None = None):
+    def __init__(
+        self,
+        templates_path: str | None = None,
+        ai_prompts_path: str | None = None,
+        ai_generator: AIGenerator | None = None,
+    ):
         config_dir = Path(__file__).parent.parent / "config"
 
         if templates_path is None:
@@ -24,6 +35,7 @@ class DraftEngine:
         with open(ai_prompts_path) as f:
             self.ai_config = json.load(f)
 
+        self._ai_generator = ai_generator
         self._draft_fingerprints: set[str] = set()
         self._forbidden_phrases = [
             p.lower()
@@ -63,9 +75,45 @@ class DraftEngine:
         }
 
     def _try_ai_draft(self, post: dict[str, Any]) -> dict[str, Any] | None:
-        """Attempt AI-generated draft. Placeholder for LLM integration."""
-        # TODO: Integrate with AI provider (OpenAI/Ollama)
-        return None
+        """Attempt AI-generated draft via LLM provider."""
+        if not self._ai_generator:
+            logger.debug("No AI generator configured, skipping AI draft")
+            return None
+
+        try:
+            # Run async generator in sync context
+            loop = None
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                pass
+
+            if loop and loop.is_running():
+                # Already in async context — create task
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    text = pool.submit(
+                        asyncio.run, self._ai_generator.generate(post)
+                    ).result(timeout=60)
+            else:
+                text = asyncio.run(self._ai_generator.generate(post))
+
+            if not text:
+                logger.info("AI generator returned empty result")
+                return None
+
+            fingerprint = self._compute_fingerprint(text)
+            return {
+                "text": text,
+                "template_id": None,
+                "post_id": post.get("id"),
+                "status": "PENDING_REVIEW",
+                "fingerprint": fingerprint,
+            }
+
+        except Exception as e:
+            logger.warning("AI draft generation failed: %s", e)
+            return None
 
     def _try_semi_dynamic(self, post: dict[str, Any]) -> dict[str, Any] | None:
         """Try to match a semi-dynamic template based on keywords."""
