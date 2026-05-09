@@ -31,7 +31,7 @@ def upgrade() -> None:
         sa.Column("id", sa.String(100), primary_key=True),
         sa.Column("name", sa.String(200), nullable=False),
         sa.Column("type", sa.String(20), server_default="group"),
-        sa.Column("url", sa.String(500), nullable=False),
+        sa.Column("url", sa.String(500), nullable=True),
         sa.Column("mode", sa.String(20), server_default="scrape_public"),
         sa.Column("priority", sa.Integer(), server_default="5"),
         sa.Column("cooldown_minutes", sa.Integer(), server_default="30"),
