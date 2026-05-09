@@ -192,9 +192,9 @@ class Parser:
         if not isinstance(value, str):
             return 0
 
-        value = value.strip().replace(",", "").replace(".", "")
+        value = value.strip()
 
-        # Handle K/M suffixes
+        # Handle K/M suffixes first (before removing separators)
         multiplier = 1
         if value.lower().endswith("k"):
             multiplier = 1000
@@ -202,6 +202,9 @@ class Parser:
         elif value.lower().endswith("m"):
             multiplier = 1_000_000
             value = value[:-1]
+
+        # Remove thousand separators (comma only; dot is decimal here)
+        value = value.replace(",", "")
 
         try:
             return int(float(value) * multiplier)
