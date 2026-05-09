@@ -76,6 +76,7 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 | 2026-05-09 | server setup | Fase 0 skeleton: struktur folder, config JSON, bot modules (scorer, draft_engine, collector, circuit_breaker, rate_guard, recovery, notifier, logger), server (FastAPI + auth + RBAC + models + routers), venv + dependencies installed, DB initialized. Path: `/home/ubuntu/fb-bot` di rdpkhorur. |
 | 2026-05-09 | git setup | Local repo `D:\program\facebook-bot`, remote `git@github.com:pikipici/fb-bot.git`, pushed ke GitHub. Workflow: local = coding + git only, rdpkhorur = runtime + deploy. |
 | 2026-05-09 | fase 1 done | Auth router (login/refresh/register/me), user service, RBAC, Alembic migration, 24 tests passed. Minimal React dashboard (login + review queue) with Tailwind + Zustand + TanStack Query. Commit `f6ae303`. |
+| 2026-05-09 | fase 2 done | Scoring engine (fixed risk formula), detector (keyword/risk/language/duplicate), pipeline (filter→score→queue), post service (DB CRUD). 47 tests passed. Commit `3c638c0`. |
 
 ## Git Conventions
 
