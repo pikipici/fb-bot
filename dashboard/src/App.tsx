@@ -3,7 +3,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from './store/authStore'
 import Login from './pages/Login'
 import ReviewQueue from './pages/ReviewQueue'
-import FBAccounts from './pages/FBAccounts'
+// DISABLED: multi-account rotation — using single account from .env
+// import FBAccounts from './pages/FBAccounts'
 
 const queryClient = new QueryClient()
 
@@ -27,14 +28,15 @@ function App() {
               </ProtectedRoute>
             }
           />
-          <Route
+          {/* DISABLED: multi-account rotation — using single account from .env */}
+          {/* <Route
             path="/accounts"
             element={
               <ProtectedRoute>
                 <FBAccounts />
               </ProtectedRoute>
             }
-          />
+          /> */}
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

@@ -9,7 +9,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from server.routers import approvals, auth, drafts, fb_accounts, health, posts, reports, settings, stats
+from server.routers import approvals, auth, drafts, health, posts, reports, settings, stats
+# DISABLED: multi-account rotation — using single account from .env
+# from server.routers import fb_accounts
 
 # Initialize Sentry (no-op if SENTRY_DSN is empty)
 sentry_dsn = os.getenv("SENTRY_DSN", "")
@@ -48,7 +50,8 @@ app.include_router(approvals.router, prefix="/api/v1", tags=["approvals"])
 app.include_router(stats.router, prefix="/api/v1", tags=["stats"])
 app.include_router(settings.router, prefix="/api/v1", tags=["settings"])
 app.include_router(reports.router, prefix="/api/v1", tags=["reports"])
-app.include_router(fb_accounts.router, prefix="/api/v1", tags=["fb-accounts"])
+# DISABLED: multi-account rotation — using single account from .env
+# app.include_router(fb_accounts.router, prefix="/api/v1", tags=["fb-accounts"])
 
 # Serve dashboard static files (production build)
 DASHBOARD_DIR = Path(__file__).parent.parent / "dashboard" / "dist"
