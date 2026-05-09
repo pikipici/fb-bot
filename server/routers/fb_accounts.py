@@ -4,11 +4,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from server.auth import get_current_user, require_role
+from server.auth import Role, require_role
 from server.database import get_db
 from server.services.fb_account_service import FBAccountService
 
 router = APIRouter(prefix="/fb-accounts", tags=["fb-accounts"])
+
+
+_admin_only = require_role(Role.ADMIN)
 
 
 class CreateAccountRequest(BaseModel):
@@ -31,7 +34,7 @@ class UpdateAccountRequest(BaseModel):
 @router.get("")
 def list_accounts(
     include_disabled: bool = False,
-    user=Depends(require_role("admin")),
+    user=Depends(_admin_only),
     db: Session = Depends(get_db),
 ):
     """List all FB accounts (admin only). Emails shown, passwords never."""
@@ -46,7 +49,7 @@ def list_accounts(
 @router.post("", status_code=201)
 def create_account(
     req: CreateAccountRequest,
-    user=Depends(require_role("admin")),
+    user=Depends(_admin_only),
     db: Session = Depends(get_db),
 ):
     """Add a new FB account (admin only)."""
@@ -67,7 +70,7 @@ def create_account(
 @router.get("/{account_id}")
 def get_account(
     account_id: int,
-    user=Depends(require_role("admin")),
+    user=Depends(_admin_only),
     db: Session = Depends(get_db),
 ):
     """Get a single FB account detail (admin only)."""
@@ -82,7 +85,7 @@ def get_account(
 def update_account(
     account_id: int,
     req: UpdateAccountRequest,
-    user=Depends(require_role("admin")),
+    user=Depends(_admin_only),
     db: Session = Depends(get_db),
 ):
     """Update FB account (admin only)."""
@@ -104,7 +107,7 @@ def update_account(
 @router.delete("/{account_id}")
 def delete_account(
     account_id: int,
-    user=Depends(require_role("admin")),
+    user=Depends(_admin_only),
     db: Session = Depends(get_db),
 ):
     """Delete FB account permanently (admin only)."""
@@ -117,7 +120,7 @@ def delete_account(
 @router.post("/{account_id}/reactivate")
 def reactivate_account(
     account_id: int,
-    user=Depends(require_role("admin")),
+    user=Depends(_admin_only),
     db: Session = Depends(get_db),
 ):
     """Reactivate a blocked/disabled account (admin only)."""
