@@ -131,7 +131,11 @@ class FBAccountService:
         for account in accounts:
             # Check cooldown
             if account.status == "COOLDOWN" and account.cooldown_until:
-                if account.cooldown_until > now:
+                cooldown = account.cooldown_until
+                # Ensure timezone-aware comparison
+                if cooldown.tzinfo is None:
+                    cooldown = cooldown.replace(tzinfo=timezone.utc)
+                if cooldown > now:
                     continue
                 # Cooldown expired, reactivate
                 account.status = "ACTIVE"
