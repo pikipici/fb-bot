@@ -2,7 +2,21 @@
 
 import os
 
+import sentry_sdk
 from celery import Celery
+from sentry_sdk.integrations.celery import CeleryIntegration
+
+# Initialize Sentry for Celery worker (no-op if SENTRY_DSN is empty)
+sentry_dsn = os.getenv("SENTRY_DSN", "")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        integrations=[CeleryIntegration()],
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_RATE", "0.1")),
+        environment=os.getenv("SENTRY_ENV", "production"),
+        release=os.getenv("SENTRY_RELEASE", "fb-bot@0.1.0"),
+        send_default_pii=False,
+    )
 
 # Redis broker URL from env or default (server uses port 6382)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6382/0")

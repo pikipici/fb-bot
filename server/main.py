@@ -2,10 +2,23 @@
 
 import os
 
+import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from server.routers import approvals, auth, drafts, health, posts, reports, settings, stats
+
+# Initialize Sentry (no-op if SENTRY_DSN is empty)
+sentry_dsn = os.getenv("SENTRY_DSN", "")
+if sentry_dsn:
+    sentry_sdk.init(
+        dsn=sentry_dsn,
+        traces_sample_rate=float(os.getenv("SENTRY_TRACES_RATE", "0.1")),
+        profiles_sample_rate=float(os.getenv("SENTRY_PROFILES_RATE", "0.1")),
+        environment=os.getenv("SENTRY_ENV", "production"),
+        release=os.getenv("SENTRY_RELEASE", "fb-bot@0.1.0"),
+        send_default_pii=False,
+    )
 
 app = FastAPI(
     title="FB Engagement Assistant API",
