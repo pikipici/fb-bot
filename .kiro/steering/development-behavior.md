@@ -78,6 +78,7 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 | 2026-05-09 | fase 1 done | Auth router (login/refresh/register/me), user service, RBAC, Alembic migration, 24 tests passed. Minimal React dashboard (login + review queue) with Tailwind + Zustand + TanStack Query. Commit `f6ae303`. |
 | 2026-05-09 | fase 2 done | Scoring engine (fixed risk formula), detector (keyword/risk/language/duplicate), pipeline (filter→score→queue), post service (DB CRUD). 47 tests passed. Commit `3c638c0`. |
 | 2026-05-09 | fase 3 done | Draft engine (fallback chain + validator + fingerprint + randomization), draft service (DB + approval + audit log), orchestrator (full cycle), API routers wired to real DB. 93 tests passed. Commit `03edb51`. |
+| 2026-05-09 | fase 4 done | Parser (scrape+API normalize, engagement K/M, relative timestamps, lang detect), Scheduler (priority+cooldown+CB filter), Collector enhanced (Playwright scrape, Graph API, block detection, dedup), Celery app+tasks (beat schedule, collect_all/single). 164 tests passed. Commit `47fc043`. |
 
 ## Git Conventions
 
