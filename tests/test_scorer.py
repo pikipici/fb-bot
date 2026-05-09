@@ -61,20 +61,29 @@ class TestRelevance:
 
 
 class TestRiskPenalty:
+    """The method now returns a factor in ``[0.0, 1.0]``. The sign is
+    applied downstream via the configured ``risk_penalty`` weight."""
+
     def test_no_risk(self, scorer):
         assert scorer.calculate_risk_penalty([]) == 0.0
 
     def test_one_risk_tag(self, scorer):
         result = scorer.calculate_risk_penalty(["politik"])
-        assert result == -0.3
+        assert result == pytest.approx(0.3)
 
     def test_multiple_risk_tags(self, scorer):
         result = scorer.calculate_risk_penalty(["politik", "sara", "hoax"])
-        assert result == pytest.approx(-0.9)
+        assert result == pytest.approx(0.9)
 
-    def test_capped_at_minus_one(self, scorer):
+    def test_capped_at_one(self, scorer):
         result = scorer.calculate_risk_penalty(["a", "b", "c", "d", "e"])
-        assert result == -1.0
+        assert result == pytest.approx(1.0)
+
+    def test_weight_applies_negative_sign(self, scorer):
+        """Regression: the weight must actually be multiplied, not ignored."""
+        assert scorer.weights["risk_penalty"] < 0
+        # Raw factor is positive; score() folds it with the negative weight.
+        assert scorer.calculate_risk_penalty(["x"]) > 0
 
 
 class TestScore:

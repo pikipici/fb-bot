@@ -3,7 +3,7 @@
     "engagement": 0.35,
     "freshness": 0.30,
     "relevance": 0.25,
-    "risk_penalty": -0.10
+    "risk_penalty": -1.0
   },
   "thresholds": {
     "queue_score_min": 0.5,

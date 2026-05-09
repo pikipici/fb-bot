@@ -184,7 +184,27 @@ class Parser:
             return datetime.now(timezone.utc).isoformat()
 
     def _parse_engagement_number(self, value: Any) -> int:
-        """Parse engagement numbers that may be strings like '1.2K', '3M', etc."""
+        """Parse engagement numbers with locale-agnostic separator handling.
+
+        Facebook renders engagement numbers in the viewer's locale. In
+        ``en-US`` a decimal is ``1.2K`` and a thousands separator is
+        ``1,500``. In ``id-ID`` / most EU locales this is inverted:
+        ``1,2K`` is the decimal form and ``1.500`` is the thousands form.
+        The collector pins its viewport locale to ``id-ID`` but that is
+        not a hard guarantee for every template, so we accept both.
+
+        Algorithm:
+        1. Extract and remove any ``K``/``M`` suffix, recording the
+           multiplier.
+        2. If the remainder contains both ``.`` and ``,`` — the
+           right-most separator is the decimal marker, and every
+           occurrence of the other separator is a thousands grouping
+           that we strip.
+        3. If only a single separator is present — treat it as the
+           decimal marker when followed by 1 or 2 digits, otherwise as
+           a thousands grouping.
+        4. Parse the cleaned string as float and apply the multiplier.
+        """
         if isinstance(value, int):
             return value
         if isinstance(value, float):
@@ -193,18 +213,44 @@ class Parser:
             return 0
 
         value = value.strip()
+        if not value:
+            return 0
 
-        # Handle K/M suffixes first (before removing separators)
+        # 1. Strip K/M suffix.
         multiplier = 1
         if value.lower().endswith("k"):
             multiplier = 1000
-            value = value[:-1]
+            value = value[:-1].rstrip()
         elif value.lower().endswith("m"):
             multiplier = 1_000_000
-            value = value[:-1]
+            value = value[:-1].rstrip()
 
-        # Remove thousand separators (comma only; dot is decimal here)
-        value = value.replace(",", "")
+        has_dot = "." in value
+        has_comma = "," in value
+
+        if has_dot and has_comma:
+            # Mixed separators — the last-seen one wins as decimal.
+            last_dot = value.rfind(".")
+            last_comma = value.rfind(",")
+            if last_dot > last_comma:
+                # '.' is decimal, ',' is thousands grouping.
+                value = value.replace(",", "")
+            else:
+                # ',' is decimal, '.' is thousands grouping.
+                value = value.replace(".", "").replace(",", ".")
+        elif has_comma:
+            # Only ',' — decimal when followed by 1-2 digits, else thousands.
+            decimals = len(value.split(",")[-1])
+            if 1 <= decimals <= 2:
+                value = value.replace(",", ".")
+            else:
+                value = value.replace(",", "")
+        elif has_dot:
+            # Only '.' — decimal when followed by 1-2 digits, else thousands.
+            decimals = len(value.split(".")[-1])
+            if decimals >= 3:
+                value = value.replace(".", "")
+            # else: already a decimal literal; leave alone.
 
         try:
             return int(float(value) * multiplier)

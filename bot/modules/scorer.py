@@ -44,10 +44,17 @@ class ScoringEngine:
         return min(matched_keywords / max(total_keywords * 0.3, 1), 1.0)
 
     def calculate_risk_penalty(self, risk_tags: list[str]) -> float:
-        """Calculate risk penalty. More tags = higher penalty."""
+        """Return a scalar in ``[-1.0, 0.0]`` representing the risk factor.
+
+        The factor is scaled to [0, 1] (0.3 per tag, capped at 1) and the
+        sign is applied downstream by multiplying with the configured
+        ``risk_penalty`` weight (negative). Previously the penalty was
+        returned pre-signed and added raw to the score, which made the
+        weight in ``scoring_rules.json`` effectively dead.
+        """
         if not risk_tags:
             return 0.0
-        return -min(len(risk_tags) * 0.3, 1.0)
+        return min(len(risk_tags) * 0.3, 1.0)
 
     def score(self, post: dict[str, Any]) -> float:
         """Calculate final score for a post."""
@@ -61,13 +68,13 @@ class ScoringEngine:
             post.get("matched_keywords", 0),
             post.get("total_keywords", 1),
         )
-        risk = self.calculate_risk_penalty(post.get("risk_tags", []))
+        risk_factor = self.calculate_risk_penalty(post.get("risk_tags", []))
 
         score = (
             self.weights["engagement"] * engagement
             + self.weights["freshness"] * freshness
             + self.weights["relevance"] * relevance
-            + risk  # risk is already negative
+            + self.weights["risk_penalty"] * risk_factor
         )
         return round(max(0.0, min(1.0, score)), 4)
 

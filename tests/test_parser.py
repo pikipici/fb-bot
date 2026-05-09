@@ -146,19 +146,41 @@ class TestEngagementParsing:
     def test_string_number(self, parser):
         assert parser._parse_engagement_number("150") == 150
 
-    def test_k_suffix(self, parser):
+    def test_k_suffix_us_locale(self, parser):
+        # en-US decimal: '.' is decimal marker
         assert parser._parse_engagement_number("1.2K") == 1200
 
-    def test_m_suffix(self, parser):
-        assert parser._parse_engagement_number("2M") == 2000000
+    def test_k_suffix_id_locale(self, parser):
+        # id-ID decimal: ',' is decimal marker — collector pins this locale
+        assert parser._parse_engagement_number("1,2K") == 1200
 
-    def test_comma_separated(self, parser):
+    def test_m_suffix(self, parser):
+        assert parser._parse_engagement_number("2M") == 2_000_000
+        assert parser._parse_engagement_number("2,5M") == 2_500_000
+        assert parser._parse_engagement_number("2.5M") == 2_500_000
+
+    def test_comma_thousands_us(self, parser):
         assert parser._parse_engagement_number("1,500") == 1500
+        assert parser._parse_engagement_number("12,345") == 12_345
+
+    def test_dot_thousands_eu(self, parser):
+        # EU / id-ID thousands: '.' every 3 digits
+        assert parser._parse_engagement_number("1.500") == 1500
+        assert parser._parse_engagement_number("12.345") == 12_345
+
+    def test_mixed_separators_us(self, parser):
+        # '1,234.56' -> 1234 (decimal is the right-most separator)
+        assert parser._parse_engagement_number("1,234.56") == 1234
+
+    def test_mixed_separators_eu(self, parser):
+        # '1.234,56' -> 1234
+        assert parser._parse_engagement_number("1.234,56") == 1234
 
     def test_invalid_returns_zero(self, parser):
         assert parser._parse_engagement_number("abc") == 0
         assert parser._parse_engagement_number(None) == 0
         assert parser._parse_engagement_number([]) == 0
+        assert parser._parse_engagement_number("") == 0
 
 
 class TestTimestampParsing:
