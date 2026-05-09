@@ -15,13 +15,19 @@ class PostService:
         self.db = db
 
     def save_post(self, post_data: dict[str, Any]) -> Post:
-        """Save a processed post to the database."""
+        """Save a processed post to the database.
+
+        Accepts both ``text_snippet`` (parser output) and ``text`` (legacy)
+        keys; whichever is present is truncated to 500 chars.
+        """
+        text = post_data.get("text_snippet") or post_data.get("text", "") or ""
+        timestamp = self._parse_timestamp(post_data.get("timestamp"))
         post = Post(
             fb_post_id=post_data["fb_post_id"],
             target_id=post_data.get("target_id", ""),
             url=post_data.get("url"),
             author_id=post_data.get("author_id"),
-            text_snippet=post_data.get("text", "")[:500],
+            text_snippet=text[:500],
             language=post_data.get("language", "id"),
             likes=post_data.get("likes", 0),
             comments=post_data.get("comments", 0),
@@ -29,12 +35,33 @@ class PostService:
             score=post_data.get("score", 0.0),
             status=post_data.get("status", "QUEUED"),
             collected_at=datetime.now(timezone.utc),
-            post_timestamp=post_data.get("timestamp"),
+            post_timestamp=timestamp,
         )
         self.db.add(post)
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
         self.db.refresh(post)
         return post
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime | None:
+        """Normalize a timestamp into an aware datetime (or None).
+
+        Parser emits ISO strings; legacy callers may pass datetime or None.
+        """
+        if value is None or value == "":
+            return None
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
 
     def save_batch(self, posts: list[dict[str, Any]]) -> list[Post]:
         """Save a batch of processed posts."""

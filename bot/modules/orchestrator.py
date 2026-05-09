@@ -28,16 +28,37 @@ class Orchestrator:
         """Full cycle: filter → score → save → draft.
 
         Args:
-            raw_posts: List of raw post dicts from collector.
+            raw_posts: List of raw post dicts from collector (already parsed
+                by ``Parser`` into the canonical shape with ``text_snippet``,
+                ``fb_post_id``, engagement fields, etc).
 
         Returns:
-            Summary of processing results.
+            Summary of processing results. Contains ``queued`` (posts that
+            passed the pipeline) and ``drafts_created`` (drafts produced
+            successfully), among other counters.
         """
-        # Load existing IDs for duplicate detection
-        existing_ids = self.post_service.get_existing_ids()
+        if not raw_posts:
+            return {
+                "total_input": 0,
+                "filtered": 0,
+                "queued": 0,
+                "saved_to_db": 0,
+                "drafts_created": 0,
+                "drafts_needs_manual": 0,
+            }
+
+        # Load existing IDs for duplicate detection (scoped by target when possible).
+        target_id = raw_posts[0].get("target_id") if raw_posts else None
+        existing_ids = self.post_service.get_existing_ids(target_id=target_id)
         self.pipeline.detector.load_seen_ids(existing_ids)
 
-        # Step 1: Pipeline (filter + score)
+        # Step 1: Pipeline (filter + score). The pipeline reads ``text`` for
+        # keyword matching; mirror ``text_snippet`` to ``text`` so parsed
+        # posts from the collector work without the caller knowing.
+        for p in raw_posts:
+            if "text" not in p and "text_snippet" in p:
+                p["text"] = p["text_snippet"]
+
         pipeline_result = self.pipeline.process_batch(raw_posts)
 
         # Step 2: Save queued posts to DB
