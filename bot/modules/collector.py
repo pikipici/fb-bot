@@ -83,17 +83,18 @@ class Collector:
     async def collect_target(self, target: dict[str, Any]) -> CollectorResult:
         """Collect posts from a single target.
 
-        Checks circuit breaker and rate guard before proceeding.
-        Routes to API or scrape mode based on target config.
+        Checks circuit breaker and rate guard before proceeding. Routes
+        to API or scrape mode based on target config. On any error we
+        ``rate_guard.release(target_id)`` so a failed fetch does not
+        consume a slot — callers can retry without being unfairly
+        throttled.
         """
         target_id = target["id"]
 
-        # Circuit breaker check
         if not self.circuit_breaker.is_available(target_id):
             logger.warning("Target %s suspended by circuit breaker", target_id)
             return CollectorResult(target_id, [], success=False, error="suspended")
 
-        # Rate guard check
         if not self.rate_guard.check_and_reserve(target_id):
             logger.info("Target %s rate limited", target_id)
             return CollectorResult(target_id, [], success=False, error="rate_limited")
@@ -111,12 +112,14 @@ class Collector:
             return CollectorResult(target_id, posts)
 
         except BlockDetectedError as e:
+            self.rate_guard.release(target_id)
             self.circuit_breaker.record_failure(target_id)
             logger.error("Block detected for %s: %s", target_id, e)
             return CollectorResult(
                 target_id, [], success=False, error=str(e), blocked=True
             )
         except Exception as e:
+            self.rate_guard.release(target_id)
             self.circuit_breaker.record_failure(target_id)
             logger.error("Collection failed for %s: %s", target_id, e)
             return CollectorResult(target_id, [], success=False, error=str(e))

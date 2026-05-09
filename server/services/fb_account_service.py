@@ -111,38 +111,59 @@ class FBAccountService:
     def get_next_available(self, purpose: str = "scrape") -> FBAccount | None:
         """Get next available account for use (rotation).
 
+        Concurrency:
+        * On engines that support row locks (Postgres / MySQL) we use
+          ``SELECT ... FOR UPDATE SKIP LOCKED`` so two workers never
+          reserve the same account.
+        * On SQLite ``with_for_update()`` is a no-op — SQLite's
+          single-writer model already prevents true races as long as
+          each call happens inside its own commit boundary.
+
         Selection logic:
         - Status ACTIVE or COOLDOWN with expired cooldown
         - Purpose matches (or 'both')
         - Sorted by: least recently used first
         """
         now = datetime.now(timezone.utc)
+        dialect = self.db.bind.dialect.name if self.db.bind is not None else ""
+        supports_lock = dialect in {"postgresql", "mysql", "mariadb"}
 
-        accounts = (
+        query = (
             self.db.query(FBAccount)
             .filter(
                 FBAccount.status.in_(["ACTIVE", "COOLDOWN"]),
                 FBAccount.purpose.in_([purpose, "both"]),
             )
             .order_by(FBAccount.last_used_at.asc().nullsfirst())
-            .all()
         )
+        if supports_lock:
+            # ``skip_locked=True`` so concurrent selectors pick different rows.
+            query = query.with_for_update(skip_locked=True)
+
+        accounts = query.all()
 
         for account in accounts:
-            # Check cooldown
             if account.status == "COOLDOWN" and account.cooldown_until:
                 cooldown = account.cooldown_until
-                # Ensure timezone-aware comparison
                 if cooldown.tzinfo is None:
                     cooldown = cooldown.replace(tzinfo=timezone.utc)
                 if cooldown > now:
                     continue
-                # Cooldown expired, reactivate
                 account.status = "ACTIVE"
-                self.db.commit()
 
+            try:
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
+            self.db.refresh(account)
             return account
 
+        # No rows reactivated → still commit to release any held lock.
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
         return None
 
     def mark_used(self, account_id: int, cooldown_minutes: int = DEFAULT_COOLDOWN_MINUTES):

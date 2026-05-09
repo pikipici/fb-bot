@@ -64,11 +64,18 @@ class CircuitBreaker:
         self._suspended_at.pop(target_id, None)
 
     def get_status(self, target_id: str) -> TargetStatus:
-        """Get current status of a target."""
+        """Get current status of a target.
+
+        When a SUSPENDED target's cooldown has expired we promote it back
+        to DEGRADED and clear the suspend timestamp so subsequent reads
+        see a consistent view (no more "SUSPENDED in storage, DEGRADED
+        in the getter" drift).
+        """
         if target_id in self._suspended_at:
             elapsed = time.time() - self._suspended_at[target_id]
             if elapsed >= self.cooldown_seconds:
-                # Cooldown expired, allow health probe
+                self._status[target_id] = TargetStatus.DEGRADED
+                self._suspended_at.pop(target_id, None)
                 return TargetStatus.DEGRADED
         return self._status.get(target_id, TargetStatus.ACTIVE)
 

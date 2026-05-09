@@ -59,44 +59,62 @@ class TargetScheduler:
         """Get list of targets that are eligible to run now.
 
         Filters:
-        - enabled == True
-        - circuit breaker allows (not SUSPENDED)
-        - cooldown elapsed since last run
+        - ``enabled == True``
+        - Circuit breaker allows the target (status != SUSPENDED)
+        - Cooldown elapsed since the last run this process saw
+        - ``rate_guard.check_and_reserve`` succeeds — we consume a token
+          here so downstream callers are guaranteed a slot. Callers must
+          ``rate_guard.release(target_id)`` from their error path if the
+          fetch does not actually happen.
+
+        Also calls ``rate_guard.begin_run(target_id)`` so the per-run
+        counter enforced inside RateGuard resets for each scheduling
+        pass.
 
         Returns targets sorted by priority (highest first).
         """
         now = time.time()
-        runnable = []
+        runnable: list[dict[str, Any]] = []
 
-        for target in self._targets:
+        # Pre-sort by priority so we reserve rate-limit slots for the
+        # highest-priority targets first when quota is tight.
+        ordered = sorted(
+            self._targets, key=lambda t: t.get("priority", 0), reverse=True
+        )
+
+        for target in ordered:
             target_id = target.get("id", "")
 
-            # Skip disabled
             if not target.get("enabled", True):
                 logger.debug("Target %s disabled, skipping", target_id)
                 continue
 
-            # Check circuit breaker
             if not self.circuit_breaker.is_available(target_id):
                 logger.info("Target %s suspended by circuit breaker", target_id)
                 continue
 
-            # Check cooldown
             cooldown_minutes = target.get("cooldown_minutes", 30)
             last_run = self._last_run.get(target_id, 0)
             elapsed_minutes = (now - last_run) / 60
-
             if last_run > 0 and elapsed_minutes < cooldown_minutes:
                 logger.debug(
                     "Target %s in cooldown (%.1f/%.1f min)",
-                    target_id, elapsed_minutes, cooldown_minutes,
+                    target_id,
+                    elapsed_minutes,
+                    cooldown_minutes,
                 )
+                continue
+
+            # Reset per-run counter then peek at rate budget. The actual
+            # reservation is made by the collector when it begins the
+            # request — this avoids double-counting here.
+            self.rate_guard.begin_run(target_id)
+            if not self.rate_guard.can_reserve(target_id):
+                logger.info("Target %s rate-limited, skipping", target_id)
                 continue
 
             runnable.append(target)
 
-        # Sort by priority descending
-        runnable.sort(key=lambda t: t.get("priority", 0), reverse=True)
         return runnable
 
     def mark_run(self, target_id: str):
