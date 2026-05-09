@@ -28,8 +28,30 @@ class ScoringEngine:
             return 0.0
         return min(math.log(total + 1) / math.log(1000), 1.0)
 
-    def calculate_freshness(self, post_timestamp: datetime) -> float:
-        """Calculate freshness score (0-1). Newer = higher."""
+    def calculate_freshness(self, post_timestamp: Any) -> float:
+        """Calculate freshness score (0-1). Newer = higher.
+
+        Accepts ``datetime`` or ISO-8601 string (parser produces the
+        latter). Naive datetimes/strings are assumed UTC. Unparseable or
+        missing input returns ``0.0`` rather than raising.
+        """
+        if post_timestamp is None:
+            return 0.0
+
+        if isinstance(post_timestamp, str):
+            try:
+                post_timestamp = datetime.fromisoformat(
+                    post_timestamp.replace("Z", "+00:00")
+                )
+            except ValueError:
+                return 0.0
+
+        if not isinstance(post_timestamp, datetime):
+            return 0.0
+
+        if post_timestamp.tzinfo is None:
+            post_timestamp = post_timestamp.replace(tzinfo=timezone.utc)
+
         now = datetime.now(timezone.utc)
         age_hours = (now - post_timestamp).total_seconds() / 3600
         max_age = self.thresholds["max_post_age_hours"]

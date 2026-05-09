@@ -46,6 +46,27 @@ class TestFreshness:
         result = scorer.calculate_freshness(now - timedelta(hours=max_age + 1))
         assert result == 0.0
 
+    def test_iso_string_input(self, scorer):
+        """Parser emits ISO strings; scorer must accept them (contract regression)."""
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+        result = scorer.calculate_freshness(ts)
+        assert result > 0.95
+
+    def test_iso_string_with_z_suffix(self, scorer):
+        ts = (datetime.now(timezone.utc) - timedelta(minutes=5))
+        ts_str = ts.isoformat().replace("+00:00", "Z")
+        assert scorer.calculate_freshness(ts_str) > 0.95
+
+    def test_naive_datetime_assumed_utc(self, scorer):
+        naive = datetime.utcnow() - timedelta(minutes=5)
+        assert scorer.calculate_freshness(naive) > 0.9
+
+    def test_none_returns_zero(self, scorer):
+        assert scorer.calculate_freshness(None) == 0.0
+
+    def test_unparseable_string_returns_zero(self, scorer):
+        assert scorer.calculate_freshness("not a date") == 0.0
+
 
 class TestRelevance:
     def test_no_keywords(self, scorer):
