@@ -52,21 +52,24 @@ app.include_router(reports.router, prefix="/api/v1", tags=["reports"])
 # Serve dashboard static files (production build)
 DASHBOARD_DIR = Path(__file__).parent.parent / "dashboard" / "dist"
 if DASHBOARD_DIR.exists() and (DASHBOARD_DIR / "index.html").exists():
+    from starlette.responses import Response
+
     app.mount("/assets", StaticFiles(directory=str(DASHBOARD_DIR / "assets")), name="assets")
 
-    @app.get("/", include_in_schema=False)
-    async def serve_root():
-        """Serve dashboard root."""
-        return FileResponse(str(DASHBOARD_DIR / "index.html"))
+    @app.middleware("http")
+    async def serve_spa_middleware(request, call_next):
+        """Serve React SPA for non-API paths."""
+        path = request.url.path
 
-    @app.get("/{full_path:path}", include_in_schema=False)
-    async def serve_spa(full_path: str):
-        """Serve React SPA — fallback to index.html for client-side routing."""
-        # Skip API paths
-        if full_path.startswith("api/"):
-            return FileResponse(str(DASHBOARD_DIR / "index.html"))
-        file_path = DASHBOARD_DIR / full_path
+        # Let API and docs routes pass through
+        if path.startswith("/api") or path.startswith("/openapi"):
+            return await call_next(request)
+
+        # Try to serve static file from dist
+        file_path = DASHBOARD_DIR / path.lstrip("/")
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
+
+        # Fallback to index.html (SPA client-side routing)
         return FileResponse(str(DASHBOARD_DIR / "index.html"))
 
