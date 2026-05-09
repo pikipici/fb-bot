@@ -14,25 +14,25 @@ Implementasi authentication, role-based access control, dan minimal dashboard un
 ## Tasks
 
 ### 1. Auth Router (login, refresh, register)
-- [ ] Buat `server/routers/auth.py` — endpoint `/api/v1/auth/login`, `/api/v1/auth/refresh`, `/api/v1/auth/register`
-- [ ] Login: validasi username + password → return access + refresh token
-- [ ] Refresh: validasi refresh token → return new access token
-- [ ] Register: hanya admin yang bisa create user baru (kecuali first user = auto admin)
-- [ ] Include router di `server/main.py`
+- [x] Buat `server/routers/auth.py` — endpoint `/api/v1/auth/login`, `/api/v1/auth/refresh`, `/api/v1/auth/register`
+- [x] Login: validasi username + password → return access + refresh token
+- [x] Refresh: validasi refresh token → return new access token
+- [x] Register: hanya admin yang bisa create user baru (kecuali first user = auto admin)
+- [x] Include router di `server/main.py`
 
 ### 2. User Service & DB Wiring
-- [ ] Buat `server/services/user_service.py` — create_user, get_user_by_username, verify_credentials
-- [ ] Seed first admin user (via CLI command atau auto-seed)
-- [ ] Alembic init + first migration untuk tabel users
+- [x] Buat `server/services/user_service.py` — create_user, get_user_by_username, verify_credentials
+- [x] Seed first admin user (via CLI command atau auto-seed)
+- [x] Alembic init + first migration untuk tabel users
 
 ### 3. RBAC Middleware
-- [ ] Verify `require_role()` dependency berfungsi di semua protected routes
-- [ ] Test: viewer gak bisa approve, operator bisa approve, admin bisa semua
+- [x] Verify `require_role()` dependency berfungsi di semua protected routes
+- [x] Test: viewer gak bisa approve, operator bisa approve, admin bisa semua
 
-### 4. Minimal React Dashboard
-- [ ] Init React + TypeScript + Vite project di `dashboard/`
-- [ ] Install Tailwind CSS + shadcn/ui
-- [ ] Buat halaman login
+### 5. Testing
+- [x] `tests/test_auth.py` — test login, refresh, register, role check
+- [x] `tests/test_user_service.py` — test create user, verify credentials
+- [x] Run tests di rdpkhorur via SSH — 24 passed
 - [ ] Buat halaman review queue (list pending drafts + approve/reject button)
 - [ ] Auth state management (Zustand) — simpan token, auto-refresh
 - [ ] API service layer (TanStack Query)

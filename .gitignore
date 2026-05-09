@@ -31,3 +31,5 @@ Thumbs.db
 
 # Exports
 bot/data/exports/*.csv
+dashboard/node_modules/
+dashboard/dist/
