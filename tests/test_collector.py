@@ -174,18 +174,25 @@ class TestCollectorApiMode:
         collector._collect_via_api.assert_called_once_with(api_target)
 
     @pytest.mark.asyncio
-    async def test_api_fallback_to_scrape_when_no_token(self, api_target, rate_guard, circuit_breaker):
+    async def test_api_mode_missing_token_raises_config_error(
+        self, api_target, rate_guard, circuit_breaker
+    ):
+        """api_first without a Graph token must fail loudly, not silently
+        fall back to scraping. The collector records the failure as an
+        error result but does NOT trip the per-target circuit breaker
+        because this is a shared config problem, not a target block."""
+        cb = CircuitBreaker()
         collector = Collector(
             rate_guard=rate_guard,
-            circuit_breaker=circuit_breaker,
+            circuit_breaker=cb,
             config={},  # No graph_api_token
         )
-        # Mock both methods
-        collector._collect_via_scrape = AsyncMock(return_value=[{"fb_post_id": "s1"}])
 
-        # _collect_via_api will call _collect_via_scrape internally when no token
         result = await collector.collect_target(api_target)
-        assert result.success is True
+        assert result.success is False
+        # The failure is surfaced but the circuit breaker stays clean.
+        assert cb._failures.get("api_page", []) == []
+        assert "api_first" in result.error or "graph_api_token" in result.error
 
 
 class TestBlockDetection:

@@ -82,7 +82,7 @@ class TestFingerprint:
     def test_fingerprint_computed(self, engine):
         fp = engine._compute_fingerprint("Hello World")
         assert isinstance(fp, str)
-        assert len(fp) == 32  # MD5 hex
+        assert len(fp) == 32  # SHA-256 truncated to 32 hex chars
 
 
 class TestDraftOutput:
