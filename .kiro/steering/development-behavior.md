@@ -80,6 +80,7 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 | 2026-05-09 | fase 3 done | Draft engine (fallback chain + validator + fingerprint + randomization), draft service (DB + approval + audit log), orchestrator (full cycle), API routers wired to real DB. 93 tests passed. Commit `03edb51`. |
 | 2026-05-09 | fase 4 done | Parser (scrape+API normalize, engagement K/M, relative timestamps, lang detect), Scheduler (priority+cooldown+CB filter), Collector enhanced (Playwright scrape, Graph API, block detection, dedup), Celery app+tasks (beat schedule, collect_all/single). 164 tests passed. Commit `47fc043`. |
 | 2026-05-09 | fase 5 done | AI Generator (OpenAI+Ollama dual provider, prompt builder from ai_prompts.json, retry+timeout, env config), DraftEngine wired (_try_ai_draft calls AI generator with async bridge, fallback on fail/invalid), feature-flag gated. 188 tests passed. Commit `5a880ed`. |
+| 2026-05-09 | deploy+monitoring | Deploy setup (systemd services, nginx, deploy.sh, .env.example), Sentry integration (FastAPI + Celery worker), Telegram notifier enhanced (daily/weekly reports, block/error/health alerts). Redis on port 6382. 204 tests passed. Commit `26c047b`. |
 
 ## Git Conventions
 
