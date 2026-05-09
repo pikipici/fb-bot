@@ -29,23 +29,18 @@ Implementasi authentication, role-based access control, dan minimal dashboard un
 - [x] Verify `require_role()` dependency berfungsi di semua protected routes
 - [x] Test: viewer gak bisa approve, operator bisa approve, admin bisa semua
 
-### 5. Testing
-- [x] `tests/test_auth.py` — test login, refresh, register, role check
-- [x] `tests/test_user_service.py` — test create user, verify credentials
-- [x] Run tests di rdpkhorur via SSH — 24 passed
-- [ ] Buat halaman review queue (list pending drafts + approve/reject button)
-- [ ] Auth state management (Zustand) — simpan token, auto-refresh
-- [ ] API service layer (TanStack Query)
-
-### 5. Testing
-- [ ] `tests/test_auth.py` — test login, refresh, register, role check
-- [ ] `tests/test_user_service.py` — test create user, verify credentials
-- [ ] Run tests di rdpkhorur via SSH
+### 4. Minimal React Dashboard
+- [x] Init React + TypeScript + Vite project di `dashboard/`
+- [x] Install Tailwind CSS + Zustand + TanStack Query + React Router
+- [x] Buat halaman login
+- [x] Buat halaman review queue (list pending drafts + approve/reject button)
+- [x] Auth state management (Zustand) — simpan token, auto-refresh
+- [x] API service layer (TanStack Query)
 
 ### 6. Verification & Deploy
-- [ ] Semua test pass di rdpkhorur
-- [ ] Push ke GitHub
-- [ ] Pull di rdpkhorur
+- [x] Semua test pass di rdpkhorur (24 passed)
+- [x] Push ke GitHub
+- [ ] Pull di rdpkhorur + build dashboard
 - [ ] Server bisa start dan health check OK
 - [ ] Login flow works end-to-end
 
