@@ -1,10 +1,13 @@
 """FastAPI Backend — main application."""
 
 import os
+from pathlib import Path
 
 import sentry_sdk
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
 from server.routers import approvals, auth, drafts, health, posts, reports, settings, stats
 
@@ -45,3 +48,17 @@ app.include_router(approvals.router, prefix="/api/v1", tags=["approvals"])
 app.include_router(stats.router, prefix="/api/v1", tags=["stats"])
 app.include_router(settings.router, prefix="/api/v1", tags=["settings"])
 app.include_router(reports.router, prefix="/api/v1", tags=["reports"])
+
+# Serve dashboard static files (production build)
+DASHBOARD_DIR = Path(__file__).parent.parent / "dashboard" / "dist"
+if DASHBOARD_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=str(DASHBOARD_DIR / "assets")), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        """Serve React SPA — fallback to index.html for client-side routing."""
+        file_path = DASHBOARD_DIR / full_path
+        if file_path.exists() and file_path.is_file():
+            return FileResponse(str(file_path))
+        return FileResponse(str(DASHBOARD_DIR / "index.html"))
+
