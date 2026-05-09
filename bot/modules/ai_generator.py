@@ -134,8 +134,17 @@ class AIGenerator:
     async def generate(self, post: dict[str, Any]) -> str | None:
         """Generate AI draft for a post.
 
-        Returns draft text string, or None if generation fails.
+        Returns draft text string, or None if generation fails. The
+        OpenAI provider is never called with an empty API key — if one
+        is missing we fail-closed rather than ship the prompt at
+        whatever ``AI_BASE_URL`` happens to be pointing at.
         """
+        if self.provider == PROVIDER_OPENAI and not self.api_key:
+            logger.error(
+                "OpenAI provider selected but OPENAI_API_KEY is empty; refusing to call."
+            )
+            return None
+
         prompt = self.build_prompt(post)
 
         for attempt in range(self.max_retries + 1):
@@ -158,10 +167,17 @@ class AIGenerator:
                     "AI API error %d (attempt %d/%d): %s",
                     e.response.status_code, attempt + 1, self.max_retries + 1, e,
                 )
-                # Don't retry on auth errors
-                if e.response.status_code in (401, 403):
+                # Don't retry on non-retryable errors (auth / bad request).
+                if e.response.status_code in (400, 401, 403, 404):
                     break
-            except Exception as e:
+            except (ValueError, KeyError, TypeError) as e:
+                # Malformed response — non-retryable.
+                logger.error(
+                    "AI response parse error (attempt %d/%d): %s",
+                    attempt + 1, self.max_retries + 1, e,
+                )
+                break
+            except Exception as e:  # noqa: BLE001
                 logger.error(
                     "AI generation error (attempt %d/%d): %s",
                     attempt + 1, self.max_retries + 1, e,

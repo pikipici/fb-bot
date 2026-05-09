@@ -1,4 +1,15 @@
-"""Detector — keyword matching, risk tagging, language filter, duplicate check."""
+"""Detector — keyword matching, risk tagging, language filter, duplicate check.
+
+Blacklist sourcing:
+* ``keywords.json`` may carry a ``blacklist`` array (historical).
+* ``blacklist.json`` carries ``phrases`` (canonical, also hosts
+  ``authors`` / ``urls`` for future use).
+
+Both are unioned here so either file remains a valid source of truth
+and the two cannot silently drift apart.
+"""
+
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -22,11 +33,18 @@ class Detector:
 
         with open(keywords_path) as f:
             kw_config = json.load(f)
-        with open(blacklist_path) as f:
-            self.blacklist = json.load(f)
+        try:
+            with open(blacklist_path) as f:
+                self.blacklist = json.load(f)
+        except FileNotFoundError:
+            self.blacklist = {}
 
         self.whitelist = [w.lower() for w in kw_config.get("whitelist", [])]
-        self.blacklist_phrases = [b.lower() for b in self.blacklist.get("phrases", [])]
+        # Union both blacklist sources and dedupe.
+        merged_phrases = set(kw_config.get("blacklist", [])) | set(
+            self.blacklist.get("phrases", [])
+        )
+        self.blacklist_phrases = sorted({p.lower() for p in merged_phrases})
         self.supported_languages = kw_config.get("languages", ["id", "en"])
         self.default_language = kw_config.get("language", "id")
 

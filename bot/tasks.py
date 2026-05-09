@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -224,3 +225,126 @@ def collect_single_target(self, target_id: str):  # noqa: ANN001
         "queued": queued,
         "drafted": drafted,
     }
+
+
+# ---------------------------------------------------------------------------
+# Scheduled reports + health check
+# ---------------------------------------------------------------------------
+
+def _build_notifier():
+    """Build a Notifier, cached-free so feature flag changes take effect."""
+    from bot.modules.notifier import Notifier
+
+    return Notifier()
+
+
+@app.task(bind=True)
+def health_check(self):  # noqa: ANN001
+    """Periodic health check: counts pending drafts + reports via notifier.
+
+    Never raises — the beat task is best-effort. Failures are logged
+    and, when the notifier is configured, surfaced as a service-health
+    alert.
+    """
+    from server.models import Draft
+
+    try:
+        with _db_session() as db:
+            pending = (
+                db.query(Draft).filter(Draft.status == "PENDING_REVIEW").count()
+            )
+        summary = {"status": "healthy", "pending_drafts": pending}
+        logger.info("health_check: %s", summary)
+        return summary
+    except Exception as exc:  # noqa: BLE001
+        logger.error("health_check failed: %s", exc)
+        try:
+            notifier = _build_notifier()
+            asyncio.run(
+                notifier.notify_service_health(
+                    "fb-bot", "unhealthy", detail=str(exc)[:200]
+                )
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to surface health alert")
+        return {"status": "unhealthy", "error": str(exc)}
+
+
+@app.task(bind=True)
+def send_daily_summary(self):  # noqa: ANN001
+    """Send the daily digest. Safe to run manually from the dashboard."""
+    from sqlalchemy import func
+    from datetime import timedelta
+    from server.models import Draft, Post
+
+    try:
+        with _db_session() as db:
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+            stats = {
+                "posts_collected": db.query(Post)
+                .filter(Post.collected_at >= cutoff)
+                .count(),
+                "posts_queued": db.query(Post)
+                .filter(Post.status == "QUEUED", Post.collected_at >= cutoff)
+                .count(),
+                "drafts_created": db.query(Draft)
+                .filter(Draft.created_at >= cutoff)
+                .count(),
+                "drafts_approved": db.query(Draft)
+                .filter(Draft.status == "APPROVED", Draft.created_at >= cutoff)
+                .count(),
+                "drafts_rejected": db.query(Draft)
+                .filter(Draft.status == "REJECTED", Draft.created_at >= cutoff)
+                .count(),
+            }
+        asyncio.run(_build_notifier().send_daily_summary(stats))
+        return {"status": "sent", "stats": stats}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("send_daily_summary failed: %s", exc)
+        return {"status": "error", "error": str(exc)}
+
+
+@app.task(bind=True)
+def send_weekly_report(self):  # noqa: ANN001
+    """Send the weekly report. Safe to run manually from the dashboard."""
+    from datetime import timedelta
+    from server.models import Draft, Post
+
+    try:
+        with _db_session() as db:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=7)
+            total_drafts = (
+                db.query(Draft).filter(Draft.created_at >= cutoff).count()
+            )
+            approved = (
+                db.query(Draft)
+                .filter(
+                    Draft.status == "APPROVED", Draft.created_at >= cutoff
+                )
+                .count()
+            )
+            rejected = (
+                db.query(Draft)
+                .filter(
+                    Draft.status == "REJECTED", Draft.created_at >= cutoff
+                )
+                .count()
+            )
+            stats = {
+                "total_posts": db.query(Post)
+                .filter(Post.collected_at >= cutoff)
+                .count(),
+                "total_drafts": total_drafts,
+                "approval_rate": (approved / total_drafts * 100)
+                if total_drafts
+                else 0.0,
+                "edit_rate": 0.0,
+                "reject_rate": (rejected / total_drafts * 100)
+                if total_drafts
+                else 0.0,
+            }
+        asyncio.run(_build_notifier().send_weekly_report(stats))
+        return {"status": "sent", "stats": stats}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("send_weekly_report failed: %s", exc)
+        return {"status": "error", "error": str(exc)}

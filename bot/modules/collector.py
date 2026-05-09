@@ -118,6 +118,12 @@ class Collector:
             return CollectorResult(
                 target_id, [], success=False, error=str(e), blocked=True
             )
+        except (CredentialError, ConfigurationError) as e:
+            # Shared / config problem — do NOT trip the circuit breaker
+            # (every target would suspend in turn for the same cause).
+            self.rate_guard.release(target_id)
+            logger.error("Collection aborted for %s: %s", target_id, e)
+            return CollectorResult(target_id, [], success=False, error=str(e))
         except Exception as e:
             self.rate_guard.release(target_id)
             self.circuit_breaker.record_failure(target_id)
@@ -228,11 +234,24 @@ class Collector:
         return posts
 
     async def _collect_via_api(self, target: dict[str, Any]) -> list[dict[str, Any]]:
-        """Collect posts via Facebook Graph API."""
+        """Collect posts via Facebook Graph API.
+
+        The access token is sent via the ``Authorization: Bearer``
+        header so it does not land in access logs or proxy logs. If
+        the token is missing we raise ``ConfigurationError`` — the old
+        silent fallback to scraping violated the target's explicit
+        ``api_first`` mode choice.
+
+        Token-expiry errors (Graph error code 190) raise
+        :class:`CredentialError` instead of :class:`BlockDetectedError`
+        so the circuit breaker does not suspend every target one by
+        one for what is really a single global credential problem.
+        """
         api_token = self.config.get("graph_api_token", "")
         if not api_token:
-            logger.warning("No Graph API token configured, falling back to scrape")
-            return await self._collect_via_scrape(target)
+            raise ConfigurationError(
+                f"Target {target.get('id')} is api_first but graph_api_token is empty"
+            )
 
         target_fb_id = target.get("fb_id", target.get("id", ""))
         max_posts = target.get("max_posts_per_run", 50)
@@ -242,17 +261,19 @@ class Collector:
             f"?fields=id,message,created_time,from,reactions.summary(true),"
             f"comments.summary(true),shares"
             f"&limit={min(max_posts, 100)}"
-            f"&access_token={api_token}"
         )
+        headers = {"Authorization": f"Bearer {api_token}"}
 
         async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url)
+            response = await client.get(url, headers=headers)
 
             if response.status_code == 400:
                 error_data = response.json().get("error", {})
                 if error_data.get("code") == 190:
-                    raise BlockDetectedError("Graph API token expired or invalid")
-                raise Exception(f"Graph API error: {error_data.get('message', 'unknown')}")
+                    raise CredentialError("Graph API token expired or invalid")
+                raise RuntimeError(
+                    f"Graph API error: {error_data.get('message', 'unknown')}"
+                )
 
             if response.status_code == 429:
                 raise BlockDetectedError("Graph API rate limit hit")
@@ -285,5 +306,26 @@ class Collector:
 
 
 class BlockDetectedError(Exception):
-    """Raised when Facebook block/captcha is detected."""
+    """Raised when Facebook block/captcha is detected for a single target."""
+
+    pass
+
+
+class CredentialError(Exception):
+    """Raised when a shared credential is invalid (e.g. Graph token expired).
+
+    This is intentionally separate from :class:`BlockDetectedError` so
+    callers can route it to a global alert path instead of tripping the
+    per-target circuit breaker for every target in turn.
+    """
+
+    pass
+
+
+class ConfigurationError(Exception):
+    """Raised when a target's configuration is internally inconsistent.
+
+    For example, ``mode=api_first`` without any Graph API token set.
+    """
+
     pass
