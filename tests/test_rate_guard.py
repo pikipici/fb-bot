@@ -78,23 +78,20 @@ class TestGlobalRateLimit:
 
 class TestPerRunCap:
     def test_per_run_cap_enforced(self, guard):
-        # override "hot" allows 2 per run
-        for _ in range(2):
-            guard.begin_run("hot")
-            time.sleep(0.11)
-            assert guard.check_and_reserve("hot") is True
-        # third attempt within the same run hits the cap even if interval ok
+        # override "hot" allows 2 reservations per run
+        guard.begin_run("hot")
+        assert guard.check_and_reserve("hot") is True
         time.sleep(0.11)
-        # Do NOT reset begin_run — we are explicitly counting within a run.
-        # Manually rebuild state by re-using the existing counter.
-        # (begin_run resets the counter, so call check_and_reserve directly.)
+        assert guard.check_and_reserve("hot") is True
+        # third attempt within the SAME run hits the cap even if interval ok
+        time.sleep(0.11)
         assert guard.check_and_reserve("hot") is False
 
     def test_begin_run_resets_cap(self, guard):
-        for _ in range(2):
-            guard.begin_run("hot")
-            time.sleep(0.11)
-            assert guard.check_and_reserve("hot") is True
+        guard.begin_run("hot")
+        assert guard.check_and_reserve("hot") is True
+        time.sleep(0.11)
+        assert guard.check_and_reserve("hot") is True
         # Fresh run → counter reset, allow again (subject to interval).
         time.sleep(0.11)
         guard.begin_run("hot")

@@ -69,12 +69,16 @@ class TestFingerprint:
     def test_duplicate_fingerprint_rejected(self, engine):
         text = "Halo kak, boleh diskusi dulu."
         assert engine._validate_draft(text) is True
-        # Same text again should be rejected
+        # After Phase D the validator is side-effect free — the caller
+        # must register the fingerprint explicitly when it commits to
+        # shipping a draft. Same text, once registered, should be
+        # rejected on the next validation pass.
+        engine._register_fingerprint(engine._compute_fingerprint(text))
         assert engine._validate_draft(text) is False
 
     def test_reset_fingerprints(self, engine):
         text = "Halo kak, boleh diskusi dulu."
-        engine._validate_draft(text)
+        engine._register_fingerprint(engine._compute_fingerprint(text))
         engine.reset_fingerprints()
         # After reset, same text should pass
         assert engine._validate_draft(text) is True
