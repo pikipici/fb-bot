@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAuthStore } from './store/authStore'
 import Login from './pages/Login'
 import ReviewQueue from './pages/ReviewQueue'
+import FBAccounts from './pages/FBAccounts'
 
 const queryClient = new QueryClient()
 
@@ -23,6 +24,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <ReviewQueue />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/accounts"
+            element={
+              <ProtectedRoute>
+                <FBAccounts />
               </ProtectedRoute>
             }
           />

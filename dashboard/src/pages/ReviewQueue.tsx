@@ -41,7 +41,13 @@ export default function ReviewQueue() {
     <div className="min-h-screen bg-gray-900 text-white">
       {/* Header */}
       <header className="bg-gray-800 border-b border-gray-700 px-6 py-4 flex items-center justify-between">
-        <h1 className="text-lg font-bold">FB Engagement Assistant</h1>
+        <div className="flex items-center gap-4">
+          <h1 className="text-lg font-bold">FB Engagement Assistant</h1>
+          <nav className="flex gap-2 text-sm">
+            <button className="text-white bg-gray-700 px-2 py-1 rounded">Review</button>
+            <button onClick={() => navigate('/accounts')} className="text-gray-400 hover:text-white px-2 py-1">Accounts</button>
+          </nav>
+        </div>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-400">
             {username} <span className="text-xs bg-gray-700 px-2 py-0.5 rounded">{role}</span>

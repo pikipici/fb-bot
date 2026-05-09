@@ -73,4 +73,26 @@ export const api = {
     }),
 
   getStats: () => request('/stats/summary'),
+
+  // FB Accounts
+  getFBAccounts: (includeDisabled = false) =>
+    request(`/fb-accounts?include_disabled=${includeDisabled}`),
+
+  createFBAccount: (data: { label: string; email: string; password: string; purpose?: string; notes?: string }) =>
+    request('/fb-accounts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateFBAccount: (id: number, data: { label?: string; email?: string; password?: string; purpose?: string; notes?: string; status?: string }) =>
+    request(`/fb-accounts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+
+  deleteFBAccount: (id: number) =>
+    request(`/fb-accounts/${id}`, { method: 'DELETE' }),
+
+  reactivateFBAccount: (id: number) =>
+    request(`/fb-accounts/${id}/reactivate`, { method: 'POST' }),
 }
