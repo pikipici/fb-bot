@@ -33,6 +33,7 @@ from server.routers import (
     settings,
     sources,
     stats,
+    templates,
     trending,
 )
 
@@ -99,6 +100,7 @@ app.include_router(reports.router, prefix="/api/v1", tags=["reports"])
 app.include_router(fb_accounts.router, prefix="/api/v1", tags=["fb-accounts"])
 app.include_router(sources.router, prefix="/api/v1", tags=["sources"])
 app.include_router(trending.router, prefix="/api/v1", tags=["trending"])
+app.include_router(templates.router, prefix="/api/v1", tags=["templates"])
 
 # Serve dashboard static files (production build)
 DASHBOARD_DIR = (Path(__file__).parent.parent / "dashboard" / "dist").resolve()
