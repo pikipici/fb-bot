@@ -93,12 +93,55 @@ _POST_SUBMIT_SETTLE_MS: int = 1500
 
 _TEXTBOX_SELECTOR = (
     'div[contenteditable="true"][role="textbox"]'
-    '[aria-label^="Comment as"]'
+    '[aria-label^="Comment as"],'
+    'div[contenteditable="true"][role="textbox"]'
+    '[aria-label^="Komen sebagai"],'
+    'div[contenteditable="true"][role="textbox"]'
+    '[aria-label^="Tulis komentar"],'
+    'div[contenteditable="true"][role="textbox"]'
+    '[aria-label^="Write a comment"],'
+    'div[contenteditable="true"][role="textbox"]'
+    '[aria-label^="Write a public comment"]'
 )
+# Locale-specific textbox variants kept separate so we can probe them
+# one-by-one — some Playwright mock harnesses route by substring and
+# cannot parse CSS selector groups. Production code uses the grouped
+# selector above for a single round-trip; the fallback loop below only
+# fires if the grouped query misses.
+_TEXTBOX_LOCALE_SELECTORS: tuple[str, ...] = (
+    'div[contenteditable="true"][role="textbox"][aria-label^="Comment as"]',
+    'div[contenteditable="true"][role="textbox"][aria-label^="Komen sebagai"]',
+    'div[contenteditable="true"][role="textbox"][aria-label^="Tulis komentar"]',
+    'div[contenteditable="true"][role="textbox"][aria-label^="Write a comment"]',
+    'div[contenteditable="true"][role="textbox"][aria-label^="Write a public comment"]',
+)
+
 _LEAVE_A_COMMENT_BUTTON = (
-    'div[role="button"][aria-label="Leave a comment"]'
+    'div[role="button"][aria-label="Leave a comment"],'
+    'div[role="button"][aria-label="Tulis komentar"],'
+    'div[role="button"][aria-label="Beri komentar"]'
 )
-_POST_COMMENT_BUTTON = 'div[role="button"][aria-label="Post comment"]'
+
+_POST_COMMENT_BUTTON = (
+    'div[role="button"][aria-label="Post comment"],'
+    'div[role="button"][aria-label="Kirim komentar"],'
+    'div[role="button"][aria-label="Posting komentar"],'
+    'div[role="button"][aria-label="Komentar"]'
+)
+# Same rationale as textbox list — locale variants probed individually
+# when the grouped selector returns nothing.
+_POST_COMMENT_BUTTON_LOCALES: tuple[str, ...] = (
+    'div[role="button"][aria-label="Post comment"]',
+    'div[role="button"][aria-label="Kirim komentar"]',
+    'div[role="button"][aria-label="Posting komentar"]',
+    'div[role="button"][aria-label="Komentar"]',
+)
+
+# Verification-node aria-label prefixes — one per locale.
+_POSTED_COMMENT_PREFIXES: tuple[str, ...] = (
+    "Comment by",
+    "Komentar oleh",
+)
 
 # Patterns that indicate FB rerouted us away from the target post.
 _LOGIN_URL_FRAGMENTS = ("/login", "/login.php", "/recover")
@@ -157,11 +200,22 @@ async def _type_humanlike(
 
 
 async def _find_composer(page: Any) -> Any | None:
-    """Locate the comment textbox, expanding composer first if needed."""
-    # Fast path — composer already rendered.
+    """Locate the comment textbox, expanding composer first if needed.
+
+    Tries the grouped multi-locale selector first, then falls back to
+    probing each locale-specific selector individually (covers mock
+    harnesses that don't parse CSS selector groups).
+    """
+    # Fast path — grouped selector hits any locale variant in one query.
     textbox = await page.query_selector(_TEXTBOX_SELECTOR)
     if textbox is not None:
         return textbox
+
+    # Per-locale fallback.
+    for sel in _TEXTBOX_LOCALE_SELECTORS:
+        textbox = await page.query_selector(sel)
+        if textbox is not None:
+            return textbox
 
     # Try clicking the "Leave a comment" stub to expand the composer.
     leave_btn = await page.query_selector(_LEAVE_A_COMMENT_BUTTON)
@@ -173,38 +227,86 @@ async def _find_composer(page: Any) -> Any | None:
             pass
 
     try:
-        return await page.wait_for_selector(
+        found = await page.wait_for_selector(
             _TEXTBOX_SELECTOR, timeout=_COMPOSER_WAIT_MS
         )
+        if found is not None:
+            return found
     except Exception:
-        return None
+        pass
+
+    # Final fallback — wait_for_selector per locale in case grouped miss.
+    for sel in _TEXTBOX_LOCALE_SELECTORS:
+        try:
+            found = await page.wait_for_selector(sel, timeout=2_000)
+            if found is not None:
+                return found
+        except Exception:
+            continue
+    return None
 
 
 async def _find_post_button(page: Any) -> Any | None:
     btn = await page.query_selector(_POST_COMMENT_BUTTON)
     if btn is not None:
         return btn
+    # Per-locale fallback for harnesses that can't parse selector groups.
+    for sel in _POST_COMMENT_BUTTON_LOCALES:
+        btn = await page.query_selector(sel)
+        if btn is not None:
+            return btn
     try:
-        return await page.wait_for_selector(
+        found = await page.wait_for_selector(
             _POST_COMMENT_BUTTON, timeout=_COMPOSER_WAIT_MS
         )
+        if found is not None:
+            return found
     except Exception:
-        return None
+        pass
+    for sel in _POST_COMMENT_BUTTON_LOCALES:
+        try:
+            found = await page.wait_for_selector(sel, timeout=2_000)
+            if found is not None:
+                return found
+        except Exception:
+            continue
+    return None
 
 
 async def _wait_posted_comment(
     page: Any, display_name: str, text: str
 ) -> Any | None:
+    """Wait for the posted-comment article node across locales.
+
+    FB renders the aria-label in the UI language (``Comment by`` in EN,
+    ``Komentar oleh`` in ID). We build a selector group and also try
+    each prefix individually as a fallback.
+    """
     safe_name = display_name.replace('"', "")
-    selector = (
-        f'div[role="article"][aria-label^="Comment by {safe_name}"]'
+    grouped = ",".join(
+        f'div[role="article"][aria-label^="{prefix} {safe_name}"]'
+        for prefix in _POSTED_COMMENT_PREFIXES
     )
+    node = None
     try:
         node = await page.wait_for_selector(
-            selector, timeout=_POSTED_COMMENT_WAIT_MS
+            grouped, timeout=_POSTED_COMMENT_WAIT_MS
         )
     except Exception:
-        return None
+        node = None
+
+    if node is None:
+        for prefix in _POSTED_COMMENT_PREFIXES:
+            sel = (
+                f'div[role="article"][aria-label^="{prefix} {safe_name}"]'
+            )
+            try:
+                node = await page.wait_for_selector(sel, timeout=2_000)
+                if node is not None:
+                    break
+            except Exception:
+                continue
+
     if node is None:
         return None
     try:

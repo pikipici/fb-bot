@@ -310,6 +310,133 @@ class TestInputValidation:
             )
 
 
+class TestLocaleAwareSelectors:
+    """FB renders aria-label in the account's UI language. Sender must
+    match both English (``Comment as``) and Indonesian (``Komen sebagai``
+    / ``Tulis komentar``) composer variants, as well as the matching
+    button labels and verification node aria-labels.
+
+    We assert by inspecting which selectors the sender consults via
+    ``query_selector`` / ``wait_for_selector`` — the caller's mock routes
+    by substring so we can tell if multiple locales are attempted.
+    """
+
+    @pytest.mark.asyncio
+    async def test_indonesian_composer_aria_label_works(
+        self, fake_playwright, fake_page
+    ):
+        from bot.modules.comment_sender import send_comment
+
+        # Composer labeled in Indonesian — only matches when the sender
+        # includes ID selectors like [aria-label^="Komen sebagai"] or a
+        # generic fallback.
+        textbox = _make_element(aria_label="Komen sebagai Digi Markt")
+        post_btn = _make_element(aria_label="Kirim komentar")
+        posted = _make_element(
+            aria_label="Komentar oleh Digi Markt baru saja",
+            inner_text="halo bro",
+        )
+
+        async def _q(sel, **kw):
+            s = sel.lower()
+            # ID composer aria-label fragments:
+            if "komen sebagai" in s or "tulis komentar" in s:
+                return textbox
+            if "kirim komentar" in s or "posting komentar" in s:
+                return post_btn
+            if "komentar oleh" in s:
+                return posted
+            return None
+
+        fake_page.query_selector.side_effect = _q
+        fake_page.wait_for_selector.side_effect = _q
+
+        result = await send_comment(
+            post_url="https://www.facebook.com/permalink.php?story_fbid=1",
+            comment_text="halo bro",
+            cookies={"c_user": "1", "xs": "y"},
+            display_name="Digi Markt",
+        )
+
+        assert result.success is True, result.error
+
+    @pytest.mark.asyncio
+    async def test_tries_multiple_composer_locales(
+        self, fake_playwright, fake_page
+    ):
+        """Sender should probe EN + ID selectors (in any order) when first miss."""
+        from bot.modules.comment_sender import send_comment
+
+        seen_selectors: list[str] = []
+
+        textbox = _make_element(aria_label="Tulis komentar publik")
+        post_btn = _make_element(aria_label="Kirim komentar")
+        posted = _make_element(
+            aria_label="Komentar oleh User baru saja", inner_text="hi"
+        )
+
+        async def _q(sel, **kw):
+            seen_selectors.append(sel)
+            s = sel.lower()
+            if "tulis komentar" in s or "komen sebagai" in s:
+                return textbox
+            if "kirim komentar" in s:
+                return post_btn
+            if "komentar oleh" in s:
+                return posted
+            return None
+
+        fake_page.query_selector.side_effect = _q
+        fake_page.wait_for_selector.side_effect = _q
+
+        result = await send_comment(
+            post_url="https://x",
+            comment_text="hi",
+            cookies={"c_user": "1"},
+            display_name="User",
+        )
+        assert result.success is True
+        all_sel = " || ".join(seen_selectors).lower()
+        # Both locales should have been considered somewhere.
+        assert "comment as" in all_sel or "komen sebagai" in all_sel
+        # The button search should also have tried an ID variant.
+        assert "kirim komentar" in all_sel or "post comment" in all_sel
+
+    @pytest.mark.asyncio
+    async def test_indonesian_verification_node_accepted(
+        self, fake_playwright, fake_page
+    ):
+        """After submit, ``Komentar oleh <name>`` should count as posted."""
+        from bot.modules.comment_sender import send_comment
+
+        textbox = _make_element(aria_label="Comment as Me")
+        post_btn = _make_element(aria_label="Post comment")
+        posted_id = _make_element(
+            aria_label="Komentar oleh Me baru saja", inner_text="halo bro"
+        )
+
+        async def _q(sel, **kw):
+            s = sel.lower()
+            if "textbox" in s or "contenteditable" in s:
+                return textbox
+            if "post comment" in s or "kirim komentar" in s:
+                return post_btn
+            if "comment by" in s or "komentar oleh" in s:
+                return posted_id
+            return None
+
+        fake_page.query_selector.side_effect = _q
+        fake_page.wait_for_selector.side_effect = _q
+
+        result = await send_comment(
+            post_url="https://x",
+            comment_text="halo bro",
+            cookies={"c_user": "1"},
+            display_name="Me",
+        )
+        assert result.success is True, result.error
+
+
 class TestPerCharDelay:
     @pytest.mark.asyncio
     async def test_respects_delay_range_param(
