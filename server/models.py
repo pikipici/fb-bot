@@ -322,3 +322,46 @@ class CommentHistory(Base):
     sent_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now, index=True
     )
+
+
+class ScannerRun(Base):
+    """Audit row for each ``scan_all_sources`` execution.
+
+    Exposed via ``GET /api/v1/scanner/status`` so the UI can show
+    ``"scan terakhir: 3 menit lalu · 4 post baru"`` instead of the
+    ambiguous React-Query fetch timestamp. ``POST /scanner/run-now``
+    inserts a ``status='running'`` row that gets flipped to
+    ``success``/``failed`` when the task completes.
+
+    Retention: we only ever read the most recent row, but keep history
+    for debugging. A maintenance job can TRUNCATE rows older than 30d.
+    """
+
+    __tablename__ = "scanner_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    task_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, index=True
+    )
+    trigger: Mapped[str] = mapped_column(
+        String(20), default="beat", nullable=False
+    )  # 'beat' | 'manual'
+    status: Mapped[str] = mapped_column(
+        String(20), default="running", nullable=False, index=True
+    )  # 'running' | 'success' | 'failed'
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, nullable=False, index=True
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    enabled_sources: Mapped[int] = mapped_column(Integer, default=0)
+    successful_scans: Mapped[int] = mapped_column(Integer, default=0)
+    scan_errors: Mapped[int] = mapped_column(Integer, default=0)
+    inserted: Mapped[int] = mapped_column(Integer, default=0)
+    updated: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    aborted_reason: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

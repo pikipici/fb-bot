@@ -30,6 +30,7 @@ from server.routers import (
     posts,
     rate_limit,
     reports,
+    scanner,
     settings,
     sources,
     stats,
@@ -101,6 +102,7 @@ app.include_router(trending.router, prefix="/api/v1", tags=["trending"])
 app.include_router(templates.router, prefix="/api/v1", tags=["templates"])
 app.include_router(rate_limit.router, prefix="/api/v1", tags=["rate-limit"])
 app.include_router(history.router, prefix="/api/v1", tags=["history"])
+app.include_router(scanner.router, prefix="/api/v1", tags=["scanner"])
 
 # Serve dashboard static files (production build)
 DASHBOARD_DIR = (Path(__file__).parent.parent / "dashboard" / "dist").resolve()

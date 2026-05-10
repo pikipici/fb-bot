@@ -523,18 +523,91 @@ def _run_scan_all_sources(db: Session) -> dict[str, Any]:
 
 
 @app.task(bind=True, max_retries=2, default_retry_delay=60)
-def scan_all_sources(self):  # noqa: ANN001
+def scan_all_sources(self, trigger: str = "beat"):  # noqa: ANN001
     """Celery beat task — scan every enabled source, upsert trending posts.
 
     Single-account MVP: picks the first ACTIVE ``FBAccount`` with cookies
     set and uses those for every scan. If any scan raises
     :class:`CookieExpiredError` we flip the account to ``EXPIRED`` and
     stop scanning until the user re-connects via the dashboard.
+
+    ``trigger`` is either ``"beat"`` (celery scheduler) or ``"manual"``
+    (``POST /scanner/run-now``). It's persisted in the ``scanner_runs``
+    audit row so the UI can show which scans were user-triggered.
     """
-    logger.info("scan_all_sources task started")
+    from server.models import ScannerRun
+
+    task_id = getattr(self.request, "id", None) if hasattr(self, "request") else None
+    logger.info("scan_all_sources task started (trigger=%s id=%s)", trigger, task_id)
+
+    run_id: int | None = None
+    with _db_session() as db:
+        run = ScannerRun(
+            task_id=str(task_id) if task_id else None,
+            trigger=trigger if trigger in ("beat", "manual") else "beat",
+            status="running",
+            started_at=datetime.now(timezone.utc),
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = run.id
+
     try:
         with _db_session() as db:
-            return _run_scan_all_sources(db)
+            summary = _run_scan_all_sources(db)
     except Exception as exc:  # noqa: BLE001
         logger.exception("scan_all_sources crashed: %s", exc)
+        _finalize_scanner_run(
+            run_id,
+            status="failed",
+            error_message=str(exc),
+        )
         return {"aborted": True, "reason": "exception", "error": str(exc)}
+
+    _finalize_scanner_run(
+        run_id,
+        status="failed" if summary.get("aborted") else "success",
+        summary=summary,
+    )
+    return summary
+
+
+def _finalize_scanner_run(
+    run_id: int | None,
+    *,
+    status: str,
+    summary: dict[str, Any] | None = None,
+    error_message: str | None = None,
+) -> None:
+    """Patch the ``ScannerRun`` row with finished_at + counters + status.
+
+    Noop when ``run_id`` is None (we failed before the row got inserted,
+    which shouldn't happen but we guard anyway).
+    """
+    if run_id is None:
+        return
+    from server.models import ScannerRun
+
+    try:
+        with _db_session() as db:
+            run = db.query(ScannerRun).filter(ScannerRun.id == run_id).first()
+            if run is None:
+                return
+            run.status = status
+            run.finished_at = datetime.now(timezone.utc)
+            if summary:
+                run.enabled_sources = int(summary.get("enabled_sources", 0))
+                run.successful_scans = int(summary.get("successful_scans", 0))
+                run.scan_errors = int(summary.get("scan_errors", 0))
+                run.inserted = int(summary.get("inserted", 0))
+                run.updated = int(summary.get("updated", 0))
+                run.skipped = int(summary.get("skipped", 0))
+                reason = summary.get("reason")
+                if reason:
+                    run.aborted_reason = str(reason)[:50]
+            if error_message:
+                run.error_message = error_message
+            db.commit()
+    except Exception:  # noqa: BLE001 — never let audit failure mask task result
+        logger.exception("failed to finalize scanner_run id=%s", run_id)
