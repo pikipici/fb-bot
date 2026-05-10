@@ -143,17 +143,12 @@ class TestAdminCrud:
             json={"label": "A", "email": "a@fb.test", "password": "p1"},
             headers=_auth(admin_token),
         )
-        client.post(
-            "/api/v1/fb-accounts",
-            json={"label": "B", "email": "b@fb.test", "password": "p2"},
-            headers=_auth(admin_token),
-        )
         resp = client.get("/api/v1/fb-accounts", headers=_auth(admin_token))
         assert resp.status_code == 200
         body = resp.json()
-        assert body["total"] == 2
+        assert body["total"] == 1
         labels = {a["label"] for a in body["accounts"]}
-        assert labels == {"A", "B"}
+        assert labels == {"A"}
         for account in body["accounts"]:
             assert "password" not in account
             assert "password_encrypted" not in account
@@ -239,3 +234,106 @@ class TestValidation:
             "/api/v1/fb-accounts/99999", headers=_auth(admin_token)
         )
         assert resp.status_code == 404
+
+
+class TestSingleAccountLimit:
+    """FB Bot is single-account by design — reject POST when one already exists."""
+
+    def test_second_create_returns_409(self, client, admin_token):
+        first = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Primary", "email": "p@fb.test", "password": "p1"},
+            headers=_auth(admin_token),
+        )
+        assert first.status_code == 201
+
+        second = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Another", "email": "a@fb.test", "password": "p2"},
+            headers=_auth(admin_token),
+        )
+        assert second.status_code == 409
+        assert "already exists" in second.json()["detail"].lower()
+
+    def test_create_allowed_again_after_delete(self, client, admin_token):
+        created = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "First", "email": "f@fb.test", "password": "p1"},
+            headers=_auth(admin_token),
+        ).json()
+        client.delete(
+            f"/api/v1/fb-accounts/{created['id']}", headers=_auth(admin_token)
+        )
+        resp = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Second", "email": "s@fb.test", "password": "p2"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201
+        assert resp.json()["label"] == "Second"
+
+    def test_blocked_account_still_blocks_second_create(self, client, admin_token):
+        created = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Primary", "email": "p@fb.test", "password": "p1"},
+            headers=_auth(admin_token),
+        ).json()
+        client.put(
+            f"/api/v1/fb-accounts/{created['id']}",
+            json={"status": "BLOCKED"},
+            headers=_auth(admin_token),
+        )
+        resp = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Replacement", "email": "r@fb.test", "password": "p2"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 409
+
+
+class TestGetCurrentAccount:
+    """/fb-accounts/current returns the single managed account (or null)."""
+
+    def test_returns_null_when_empty(self, client, admin_token):
+        resp = client.get("/api/v1/fb-accounts/current", headers=_auth(admin_token))
+        assert resp.status_code == 200
+        assert resp.json() == {"account": None}
+
+    def test_returns_account_when_exists(self, client, admin_token):
+        client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Main", "email": "m@fb.test", "password": "p"},
+            headers=_auth(admin_token),
+        )
+        resp = client.get("/api/v1/fb-accounts/current", headers=_auth(admin_token))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["account"] is not None
+        assert body["account"]["label"] == "Main"
+        assert body["account"]["email"] == "m@fb.test"
+        assert "password" not in body["account"]
+
+    def test_viewer_cannot_read_current(self, client, viewer_token):
+        resp = client.get(
+            "/api/v1/fb-accounts/current", headers=_auth(viewer_token)
+        )
+        assert resp.status_code == 403
+
+    def test_returns_disabled_account(self, client, admin_token):
+        """Current endpoint includes disabled accounts (canonical single read)."""
+        created = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Main", "email": "m@fb.test", "password": "p"},
+            headers=_auth(admin_token),
+        ).json()
+        client.put(
+            f"/api/v1/fb-accounts/{created['id']}",
+            json={"status": "DISABLED"},
+            headers=_auth(admin_token),
+        )
+        resp = client.get(
+            "/api/v1/fb-accounts/current", headers=_auth(admin_token)
+        )
+        body = resp.json()
+        assert body["account"] is not None
+        assert body["account"]["status"] == "DISABLED"

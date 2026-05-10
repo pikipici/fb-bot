@@ -46,17 +46,42 @@ def list_accounts(
     }
 
 
+@router.get("/current")
+def get_current_account(
+    user=Depends(_admin_only),
+    db: Session = Depends(get_db),
+):
+    """Return the single managed FB account (or null when none exists).
+
+    FB Bot is single-account by design; this endpoint is the canonical read
+    for the setup/edit UI.
+    """
+    svc = FBAccountService(db)
+    accounts = svc.list_accounts(include_disabled=True)
+    if not accounts:
+        return {"account": None}
+    return {"account": svc.to_dict(accounts[0], include_email=True)}
+
+
 @router.post("", status_code=201)
 def create_account(
     req: CreateAccountRequest,
     user=Depends(_admin_only),
     db: Session = Depends(get_db),
 ):
-    """Add a new FB account (admin only)."""
+    """Add the FB account (admin only). Single-account system — rejects with
+    HTTP 409 if an account already exists (active or not)."""
     if req.purpose not in ("scrape", "post", "both"):
         raise HTTPException(400, "purpose must be 'scrape', 'post', or 'both'")
 
     svc = FBAccountService(db)
+    existing = svc.list_accounts(include_disabled=True)
+    if existing:
+        raise HTTPException(
+            409,
+            "An FB account already exists. Edit or delete the existing one instead.",
+        )
+
     account = svc.create_account(
         label=req.label,
         email=req.email,
