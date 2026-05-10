@@ -210,7 +210,7 @@ Desain sederhana: 1 endpoint `POST /fb-accounts/connect` body `{label, raw_cooki
 
 ## Phase B — Frontend: Cookie Connect UX
 
-### Task B1: Update `FBAccounts.tsx` — Tab Cookie vs Manual `[ ]`
+### Task B1: Update `FBAccounts.tsx` — Tab Cookie vs Manual `[x]`
 
 **Objective:** Setup page sekarang punya 2 tab: "Cookie (Direkomendasikan)" dan "Manual". Cookie tab ada textarea gede buat paste cookie string + tombol "Preview Akun". Setelah preview sukses, tampil card preview (foto, nama, fb_user_id) + field label + tombol "Simpan". Manual tab tetep kayak existing.
 
