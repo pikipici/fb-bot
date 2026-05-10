@@ -529,7 +529,7 @@ MVP: template cuma string literal, return as-is. Nanti bisa support placeholder 
 
 ---
 
-### Task F5: Send Endpoint + UI Wiring `[ ]`
+### Task F5: Send Endpoint + UI Wiring `[x]`
 
 **Objective:** `POST /api/v1/trending/{post_id}/comment` body `{comment_text}` → panggil `comment_sender.send()` → save ke `comment_history` → update `trending_posts.status = 'COMMENTED'`. Return `{ok, fb_comment_id?, error?}`.
 
