@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { QuotaWidget } from '@/components/quota-widget'
+import { AccountStatusBanner } from '@/components/account-status-banner'
 import { cn } from '@/lib/utils'
 
 interface NavItem {
@@ -77,6 +78,7 @@ export function AppHeader() {
           </Button>
         </div>
       </div>
+      <AccountStatusBanner />
     </header>
   )
 }
