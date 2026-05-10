@@ -182,4 +182,12 @@ export const api = {
 
   skipTrendingPost: (postId: number) =>
     request(`/trending/${postId}/skip`, { method: 'POST' }),
+
+  sendComment: (postId: number, commentText: string) =>
+    request(`/trending/${postId}/comment`, {
+      method: 'POST',
+      body: JSON.stringify({ comment_text: commentText }),
+    }),
+
+  getRateLimitStatus: () => request('/rate-limit/status'),
 }

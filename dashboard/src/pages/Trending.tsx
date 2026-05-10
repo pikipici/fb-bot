@@ -3,10 +3,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ExternalLink,
   Flame,
+  Gauge,
   Loader2,
   MessageCircle,
   RefreshCw,
   Repeat2,
+  Send,
   Sparkles,
   ThumbsUp,
   TrendingUp,
@@ -79,6 +81,31 @@ interface DraftResponse {
   post: TrendingPost
 }
 
+interface QuotaStatus {
+  allowed: boolean
+  used: number
+  remaining: number
+  limit: number
+  window_hours: number
+  resets_at: string | null
+}
+
+interface RateLimitResponse {
+  quota: QuotaStatus
+}
+
+interface SendCommentResponse {
+  result: {
+    success: boolean
+    comment_text: string
+    post_url: string
+    fb_comment_id: string | null
+    error: string | null
+  }
+  post: TrendingPost
+  quota: QuotaStatus
+}
+
 const REFETCH_MS = 30_000
 
 function formatCount(n: number): string {
@@ -124,8 +151,12 @@ function PostCard({
   onCancelDraft,
   onDraftChange,
   onSkip,
+  onSend,
   isDrafting,
   isSkipping,
+  isSending,
+  sendDisabled,
+  sendDisabledReason,
 }: {
   post: TrendingPost
   isAdmin: boolean
@@ -134,14 +165,19 @@ function PostCard({
   onCancelDraft: () => void
   onDraftChange: (text: string) => void
   onSkip: (postId: number) => void
+  onSend: (postId: number, text: string) => void
   isDrafting: boolean
   isSkipping: boolean
+  isSending: boolean
+  sendDisabled: boolean
+  sendDisabledReason: string
 }) {
   const text = post.text_snippet?.trim() || ''
   const truncated = text.length > 280 ? text.slice(0, 280) + '…' : text
   const draftOpen = activeDraft !== null
   const canDraft = isAdmin && post.status !== 'COMMENTED'
   const canSkip = isAdmin && post.status !== 'COMMENTED'
+  const draftTrimmed = (activeDraft || '').trim()
 
   return (
     <Card className="flex flex-col overflow-hidden">
@@ -227,12 +263,27 @@ function PostCard({
               onChange={(e) => onDraftChange(e.target.value)}
               className="min-h-[90px] font-mono text-sm"
               placeholder="Teks komen..."
+              disabled={isSending}
             />
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground text-[10px]">
-                Send belum aktif (Phase F5)
+                {sendDisabled
+                  ? sendDisabledReason
+                  : `${draftTrimmed.length} karakter`}
               </span>
-              <Button size="sm" disabled title="Send tersedia di Phase F5">
+              <Button
+                size="sm"
+                disabled={
+                  isSending || sendDisabled || draftTrimmed.length === 0
+                }
+                onClick={() => onSend(post.id, draftTrimmed)}
+                title={sendDisabled ? sendDisabledReason : 'Kirim komen ke FB'}
+              >
+                {isSending ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="mr-1.5 h-3.5 w-3.5" />
+                )}
                 Send
               </Button>
             </div>
@@ -324,6 +375,13 @@ export default function Trending() {
     refetchOnWindowFocus: true,
   })
 
+  const quotaQuery = useQuery<RateLimitResponse>({
+    queryKey: ['rate-limit-status'],
+    queryFn: () => api.getRateLimitStatus(),
+    refetchInterval: REFETCH_MS,
+    refetchOnWindowFocus: true,
+  })
+
   const draftMutation = useMutation<DraftResponse, Error, number>({
     mutationFn: (postId) => api.generateDraft(postId),
     onSuccess: (data) => {
@@ -347,9 +405,42 @@ export default function Trending() {
     },
   })
 
+  const sendMutation = useMutation<
+    SendCommentResponse,
+    Error,
+    { postId: number; text: string }
+  >({
+    mutationFn: ({ postId, text }) => api.sendComment(postId, text),
+    onSuccess: (data) => {
+      toast.success(`Komen terkirim ke ${data.post.author_name || 'post'}`)
+      setDraftingPostId(null)
+      setDraftText('')
+      qc.invalidateQueries({ queryKey: ['trending'] })
+      qc.invalidateQueries({ queryKey: ['rate-limit-status'] })
+    },
+    onError: (err) => {
+      toast.error(err.message || 'Gagal kirim komen')
+      qc.invalidateQueries({ queryKey: ['rate-limit-status'] })
+    },
+  })
+
   const posts = trendingQuery.data?.posts ?? []
   const total = trendingQuery.data?.total ?? 0
   const sources = sourcesQuery.data?.sources ?? []
+  const quota = quotaQuery.data?.quota
+
+  const sendDisabled = !isAdmin || !quota || !quota.allowed
+  const sendDisabledReason = !isAdmin
+    ? 'Butuh role admin buat kirim komen'
+    : !quota
+      ? 'Memeriksa quota...'
+      : !quota.allowed
+        ? `Quota habis — reset ${
+            quota.resets_at
+              ? formatRelative(quota.resets_at)
+              : 'nanti'
+          }`
+        : ''
 
   const lastUpdatedLabel = useMemo(() => {
     if (!trendingQuery.dataUpdatedAt) return '—'
@@ -398,6 +489,52 @@ export default function Trending() {
             </Button>
           </div>
         </div>
+
+        <Card className="p-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Gauge
+                className={cn(
+                  'h-3.5 w-3.5',
+                  quota && !quota.allowed
+                    ? 'text-destructive'
+                    : 'text-muted-foreground',
+                )}
+              />
+              <span className="text-xs font-medium">
+                Quota komen
+              </span>
+            </div>
+            <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
+              {quota ? (
+                <>
+                  <span
+                    className={cn(
+                      'font-medium',
+                      !quota.allowed && 'text-destructive',
+                    )}
+                  >
+                    {quota.used}/{quota.limit}
+                  </span>
+                  <span>dalam {quota.window_hours} jam</span>
+                  {quota.resets_at && (
+                    <>
+                      <span className="opacity-50">•</span>
+                      <span>reset {formatRelative(quota.resets_at)}</span>
+                    </>
+                  )}
+                </>
+              ) : (
+                <span>memuat...</span>
+              )}
+            </div>
+            {quota && !quota.allowed && (
+              <span className="text-destructive ml-auto text-xs font-medium">
+                Send diblok sampai quota reset
+              </span>
+            )}
+          </div>
+        </Card>
 
         <Card className="p-3">
           <div className="flex flex-wrap items-center gap-3">
@@ -499,6 +636,9 @@ export default function Trending() {
                 }}
                 onDraftChange={setDraftText}
                 onSkip={(pid) => skipMutation.mutate(pid)}
+                onSend={(pid, text) =>
+                  sendMutation.mutate({ postId: pid, text })
+                }
                 isDrafting={
                   draftMutation.isPending &&
                   draftMutation.variables === post.id
@@ -507,6 +647,12 @@ export default function Trending() {
                   skipMutation.isPending &&
                   skipMutation.variables === post.id
                 }
+                isSending={
+                  sendMutation.isPending &&
+                  sendMutation.variables?.postId === post.id
+                }
+                sendDisabled={sendDisabled}
+                sendDisabledReason={sendDisabledReason}
               />
             ))}
           </div>
