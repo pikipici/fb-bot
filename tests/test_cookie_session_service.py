@@ -188,6 +188,34 @@ class TestValidateAndFetchProfile:
         assert profile.name == "User 100001"
         assert profile.profile_pic_url == "https://fbcdn.net/x.jpg"
 
+    async def test_silhouette_picture_returns_none(self):
+        """If Graph reports ``is_silhouette: true`` we treat the URL as no
+        real avatar and return ``None`` so the UI falls back to a local
+        placeholder instead of rendering FB's generic grey silhouette.
+        """
+        cookies = {"c_user": "100001", "xs": "abc"}
+        validate_resp = _make_response(200, text="ok")
+        profile_resp = _make_response(
+            200, final_url="https://m.facebook.com/p/Foo-Bar-100001/"
+        )
+        picture_resp = _make_response(
+            200,
+            json_body={
+                "data": {
+                    "height": 200,
+                    "is_silhouette": True,
+                    "url": "https://scontent.xx.fbcdn.net/default.jpg",
+                }
+            },
+        )
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            _install_sequential_get(
+                mock_client_cls, [validate_resp, profile_resp, picture_resp]
+            )
+            profile = await validate_and_fetch_profile(cookies)
+        assert profile.name == "Foo Bar"
+        assert profile.profile_pic_url is None
+
     async def test_picture_failure_returns_none_pic_but_still_valid(self):
         cookies = {"c_user": "100001", "xs": "abc"}
         validate_resp = _make_response(200, text="ok")
