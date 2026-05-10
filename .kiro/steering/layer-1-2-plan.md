@@ -491,7 +491,27 @@ MVP: template cuma string literal, return as-is. Nanti bisa support placeholder 
 
 ---
 
-### Task F4: Send Comment via Playwright `[ ]`
+### Task F4a: Rate Limit Service + Quota Endpoint `[x]`
+
+**Objective:** Service layer buat 5 komen / 6 jam rolling-window quota check, plus CommentHistory insert yang flip `TrendingPost.status='COMMENTED'` buat status SENT. Endpoint `GET /api/v1/rate-limit/status` buat Dashboard quota banner (F7) + preflight buat Send button.
+
+**Files:**
+- Create: `server/services/rate_limit_service.py`
+- Create: `server/routers/rate_limit.py`
+- Create: `tests/test_rate_limit_service.py` (16 test)
+- Create: `tests/test_rate_limit_router.py` (7 test)
+
+**Response shape:**
+```json
+{"quota": {"allowed": true, "used": 0, "remaining": 5, "limit": 5,
+ "window_hours": 6, "resets_at": null}}
+```
+
+**Commit:** `feat: rate limit service 5/6h rolling window with quota preflight`
+
+---
+
+### Task F4b: Send Comment via Playwright `[ ]`
 
 **Objective:** Backend module yang pake Playwright pake session cookies → buka post URL → tunggu comment input muncul → type text (with per-char delay) → click submit → verify komen muncul di list → extract `fb_comment_id` kalau bisa.
 
@@ -500,11 +520,12 @@ MVP: template cuma string literal, return as-is. Nanti bisa support placeholder 
 - Create: `tests/test_comment_sender.py` (mock Playwright)
 
 **Rate limit guard:**
-- Cek `comment_history` 6 jam terakhir
-- Kalau >= 5 → raise `RateLimitedError`
+- Panggil `RateLimitService.check_allowed()` sebelum kirim
+- Kalau `allowed=False` → raise `RateLimitExceededError` (dari F4a)
 - Random delay 30-120 detik antar send (kalau user klik rapid)
+- Setelah kirim → panggil `RateLimitService.record_send(...)` (auto-flip status)
 
-**Commit:** `feat: comment sender module with rate limit guard`
+**Commit:** `feat: comment sender module with playwright + rate limit guard`
 
 ---
 
