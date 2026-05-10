@@ -97,6 +97,8 @@ _TEXTBOX_SELECTOR = (
     'div[contenteditable="true"][role="textbox"]'
     '[aria-label^="Komen sebagai"],'
     'div[contenteditable="true"][role="textbox"]'
+    '[aria-label^="Berkomentar sebagai"],'
+    'div[contenteditable="true"][role="textbox"]'
     '[aria-label^="Tulis komentar"],'
     'div[contenteditable="true"][role="textbox"]'
     '[aria-label^="Write a comment"],'
@@ -111,6 +113,7 @@ _TEXTBOX_SELECTOR = (
 _TEXTBOX_LOCALE_SELECTORS: tuple[str, ...] = (
     'div[contenteditable="true"][role="textbox"][aria-label^="Comment as"]',
     'div[contenteditable="true"][role="textbox"][aria-label^="Komen sebagai"]',
+    'div[contenteditable="true"][role="textbox"][aria-label^="Berkomentar sebagai"]',
     'div[contenteditable="true"][role="textbox"][aria-label^="Tulis komentar"]',
     'div[contenteditable="true"][role="textbox"][aria-label^="Write a comment"]',
     'div[contenteditable="true"][role="textbox"][aria-label^="Write a public comment"]',
@@ -384,6 +387,21 @@ async def send_comment(
             except Exception:
                 logger.debug("networkidle timeout on %s — continuing", post_url)
             await page.wait_for_timeout(1500)
+
+            # Hydrate the composer for photo-viewer / dialog-rendered posts.
+            # FB lazily mounts the comment textbox only when the comments
+            # region enters the viewport. Without this scroll, pages like
+            # ``/photo/?fbid=...`` return zero contenteditable nodes on
+            # initial load and every send fails with "composer ga ketemu".
+            try:
+                await page.evaluate(
+                    "() => window.scrollTo(0, document.body.scrollHeight)"
+                )
+                await page.wait_for_timeout(1200)
+            except Exception:
+                logger.debug(
+                    "scroll-to-bottom failed on %s — continuing", post_url
+                )
 
             textbox = await _find_composer(page)
             if textbox is None:
