@@ -29,7 +29,16 @@ from server.services.ai_draft_service import (
     AIDraftRateLimitError,
     AIDraftService,
     AIDraftUpstreamError,
+    _reset_rate_limit_for_tests,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_between_tests():
+    """Module-level rate limit dict must not leak across tests."""
+    _reset_rate_limit_for_tests()
+    yield
+    _reset_rate_limit_for_tests()
 
 
 @pytest.fixture
