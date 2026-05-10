@@ -228,6 +228,37 @@ class TestCookieExpired:
                 display_name="X",
             )
 
+    @pytest.mark.asyncio
+    async def test_login_wall_dom_raises_even_when_url_safe(
+        self, fake_playwright, fake_page
+    ):
+        """FB can serve login wall without URL redirect — rely on DOM.
+
+        Reproduces the failure mode where cookies are stale and FB
+        serves the account-chooser in the body while keeping the
+        original URL. Must raise CookieExpiredError so the router
+        flips account status to EXPIRED.
+        """
+        from bot.modules.comment_sender import (
+            CookieExpiredError,
+            send_comment,
+        )
+
+        fake_page.url = "https://www.facebook.com/photo/?fbid=x"  # URL safe
+        # evaluate() is called for scroll-to-bottom + login-wall probe;
+        # return the login-marker shape for any evaluate call.
+        fake_page.evaluate = AsyncMock(
+            return_value={"loginMarker": True, "reason": "text:Masuk Facebook"}
+        )
+
+        with pytest.raises(CookieExpiredError):
+            await send_comment(
+                post_url="https://www.facebook.com/photo/?fbid=x",
+                comment_text="hi",
+                cookies={"c_user": "1"},
+                display_name="X",
+            )
+
 
 class TestCheckpoint:
     @pytest.mark.asyncio

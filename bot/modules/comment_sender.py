@@ -40,6 +40,7 @@ from typing import Any
 
 from playwright.async_api import async_playwright
 
+from bot.modules.fb_auth_probe import is_login_wall, login_wall_reason
 from bot.modules.fb_session import create_session_context
 
 logger = logging.getLogger(__name__)
@@ -412,6 +413,18 @@ async def send_comment(
             except Exception:
                 logger.debug("networkidle timeout on %s — continuing", post_url)
             await page.wait_for_timeout(1500)
+
+            # DOM-based login-wall check. FB sometimes keeps the
+            # original URL but renders the login form / account chooser
+            # when cookies are stale. URL fragment check alone misses
+            # this path, so probe the DOM before we burn time trying
+            # to find a composer that will never hydrate.
+            if await is_login_wall(page):
+                reason = await login_wall_reason(page) or "unknown"
+                raise CookieExpiredError(
+                    f"Login wall terdeteksi di {post_url} "
+                    f"(reason={reason}) — cookie expired."
+                )
 
             # Hydrate the composer for photo-viewer / dialog-rendered posts.
             # FB lazily mounts the comment textbox only when the comments
