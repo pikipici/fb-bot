@@ -233,7 +233,7 @@ Desain sederhana: 1 endpoint `POST /fb-accounts/connect` body `{label, raw_cooki
 
 ## Phase C — Sources Management (CRUD Backend + UI)
 
-### Task C1: Sources Service `[ ]`
+### Task C1: Sources Service `[x]`
 
 **Objective:** CRUD service untuk sources.
 
@@ -247,7 +247,7 @@ Desain sederhana: 1 endpoint `POST /fb-accounts/connect` body `{label, raw_cooki
 
 ---
 
-### Task C2: Sources Router `/api/v1/sources` `[ ]`
+### Task C2: Sources Router `/api/v1/sources` `[x]`
 
 **Objective:** REST endpoints. Admin-only (pake existing `require_admin`).
 
@@ -267,7 +267,7 @@ Desain sederhana: 1 endpoint `POST /fb-accounts/connect` body `{label, raw_cooki
 
 ---
 
-### Task C3: Sources Page `/sources` Frontend `[ ]`
+### Task C3: Sources Page `/sources` Frontend `[x]`
 
 **Objective:** Dashboard page dengan list sources + modal create/edit. Type picker (home_feed / group / page), URL input (disabled untuk home_feed), keyword include/exclude sebagai chip input.
 
