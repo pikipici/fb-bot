@@ -449,6 +449,7 @@ export default function FBAccounts() {
             <Tabs
               value={setupTab}
               onValueChange={(v) => setSetupTab(v as 'cookie' | 'manual')}
+              className="min-w-0"
             >
               <TabsList className="w-full">
                 <TabsTrigger value="cookie" className="flex-1">
@@ -461,7 +462,7 @@ export default function FBAccounts() {
                 </TabsTrigger>
               </TabsList>
 
-              <TabsContent value="cookie" className="mt-4 space-y-4">
+              <TabsContent value="cookie" className="mt-4 min-w-0 space-y-4">
                 <CookieInstructions />
 
                 <div className="space-y-2">
@@ -484,7 +485,8 @@ export default function FBAccounts() {
                       setCookiePreview(null)
                     }}
                     placeholder="c_user=...; xs=...; datr=...; fr=...;"
-                    className="min-h-28 font-mono text-xs"
+                    wrap="soft"
+                    className="min-h-28 max-w-full font-mono text-xs break-all whitespace-pre-wrap"
                   />
                   <p className="text-muted-foreground text-xs">
                     Format Header String dari Cookie-Editor. Jangan paste format
