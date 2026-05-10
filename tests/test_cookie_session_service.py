@@ -72,70 +72,149 @@ class TestSerializeCookies:
     def test_preserves_order(self):
         original = {"a": "1", "b": "2", "c": "3"}
         s = serialize_cookies(original)
-        # Format should be "a=1; b=2; c=3"
         assert s == "a=1; b=2; c=3"
 
 
 # --- validate_and_fetch_profile ------------------------------------------
 
 
+def _make_response(
+    status: int = 200,
+    *,
+    text: str = "",
+    json_body: dict | None = None,
+    final_url: str = "https://m.facebook.com/me",
+) -> httpx.Response:
+    request = httpx.Request("GET", final_url)
+    if json_body is not None:
+        import json
+
+        return httpx.Response(status, text=json.dumps(json_body), request=request)
+    return httpx.Response(status, text=text, request=request)
+
+
+def _install_sequential_get(monkeypatch_target, responses):
+    """Replace httpx.AsyncClient so ``.get(url)`` returns queued responses
+    in order. Each queued item may be a Response or a callable(url) ->
+    Response for URL-conditional behavior.
+    """
+    it = iter(responses)
+
+    async def fake_get(url, *args, **kwargs):
+        try:
+            nxt = next(it)
+        except StopIteration:  # pragma: no cover — defensive
+            raise AssertionError(f"Unexpected extra GET to {url}") from None
+        if callable(nxt):
+            return nxt(url)
+        return nxt
+
+    client_instance = AsyncMock()
+    client_instance.__aenter__.return_value = client_instance
+    client_instance.__aexit__.return_value = None
+    client_instance.get = fake_get
+    monkeypatch_target.return_value = client_instance
+
+
 @pytest.mark.asyncio
 class TestValidateAndFetchProfile:
-    async def test_happy_path_extracts_profile(self):
-        # m.facebook.com/me redirects to user's profile page with their
-        # name in <title> and user_id in a script tag.
+    async def test_happy_path_extracts_full_profile(self):
         cookies = {"c_user": "100001234567890", "xs": "abc"}
-        html = """
-        <html><head><title>Budi Santoso | Facebook</title></head>
-        <body>
-        <script>{"USER_ID":"100001234567890","PROFILE_PIC":"https://scontent.fb.com/pic.jpg"}</script>
-        </body></html>
-        """
-
-        mock_response = httpx.Response(
-            200,
-            text=html,
-            request=httpx.Request("GET", "https://m.facebook.com/me"),
+        validate_resp = _make_response(
+            200, text="<html>ok</html>", final_url="https://m.facebook.com/me"
         )
-
+        profile_resp = _make_response(
+            200,
+            text="<html/>",
+            final_url="https://m.facebook.com/p/Digi-Markt-100001234567890/",
+        )
+        picture_resp = _make_response(
+            200,
+            json_body={
+                "data": {
+                    "height": 200,
+                    "width": 200,
+                    "is_silhouette": False,
+                    "url": "https://scontent.xx.fbcdn.net/pic.jpg",
+                }
+            },
+            final_url=(
+                "https://graph.facebook.com/100001234567890/picture"
+                "?redirect=0&type=large"
+            ),
+        )
         with patch("httpx.AsyncClient") as mock_client_cls:
-            client_instance = AsyncMock()
-            client_instance.__aenter__.return_value = client_instance
-            client_instance.__aexit__.return_value = None
-            client_instance.get = AsyncMock(return_value=mock_response)
-            mock_client_cls.return_value = client_instance
-
+            _install_sequential_get(
+                mock_client_cls, [validate_resp, profile_resp, picture_resp]
+            )
             profile = await validate_and_fetch_profile(cookies)
 
         assert isinstance(profile, ProfileInfo)
         assert profile.fb_user_id == "100001234567890"
-        assert profile.name == "Budi Santoso"
-        assert "scontent.fb.com" in (profile.profile_pic_url or "")
+        assert profile.name == "Digi Markt"
+        assert profile.profile_pic_url == "https://scontent.xx.fbcdn.net/pic.jpg"
+
+    async def test_vanity_redirect_parses_name(self):
+        cookies = {"c_user": "100001", "xs": "abc"}
+        validate_resp = _make_response(200, text="ok")
+        profile_resp = _make_response(
+            200, final_url="https://m.facebook.com/zuck/"
+        )
+        picture_resp = _make_response(
+            200, json_body={"data": {"url": "https://fbcdn.net/x.jpg"}}
+        )
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            _install_sequential_get(
+                mock_client_cls, [validate_resp, profile_resp, picture_resp]
+            )
+            profile = await validate_and_fetch_profile(cookies)
+        assert profile.name == "zuck"
+
+    async def test_name_unresolved_falls_back_to_user_id(self):
+        cookies = {"c_user": "100001", "xs": "abc"}
+        validate_resp = _make_response(200, text="ok")
+        # Profile request fails — caller falls back.
+        profile_resp = _make_response(
+            500, text="oops", final_url="https://m.facebook.com/err"
+        )
+        picture_resp = _make_response(
+            200, json_body={"data": {"url": "https://fbcdn.net/x.jpg"}}
+        )
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            _install_sequential_get(
+                mock_client_cls, [validate_resp, profile_resp, picture_resp]
+            )
+            profile = await validate_and_fetch_profile(cookies)
+        assert profile.name == "User 100001"
+        assert profile.profile_pic_url == "https://fbcdn.net/x.jpg"
+
+    async def test_picture_failure_returns_none_pic_but_still_valid(self):
+        cookies = {"c_user": "100001", "xs": "abc"}
+        validate_resp = _make_response(200, text="ok")
+        profile_resp = _make_response(
+            200, final_url="https://m.facebook.com/p/Foo-Bar-100001/"
+        )
+        picture_resp = _make_response(500, text="boom")
+        with patch("httpx.AsyncClient") as mock_client_cls:
+            _install_sequential_get(
+                mock_client_cls, [validate_resp, profile_resp, picture_resp]
+            )
+            profile = await validate_and_fetch_profile(cookies)
+        assert profile.name == "Foo Bar"
+        assert profile.profile_pic_url is None
 
     async def test_invalid_cookies_redirects_to_login(self):
         cookies = {"c_user": "bad", "xs": "bad"}
-        # When cookies are invalid, m.facebook.com/me redirects to /login/
-        # which returns an HTML page with a login form.
-        login_html = "<html><body><form action='/login/' method='POST'><input name='email'/></form></body></html>"
-
-        mock_response = httpx.Response(
-            200,
-            text=login_html,
-            request=httpx.Request("GET", "https://m.facebook.com/login/"),
+        validate_resp = _make_response(
+            200, text="<form/>", final_url="https://m.facebook.com/login/"
         )
-
         with patch("httpx.AsyncClient") as mock_client_cls:
-            client_instance = AsyncMock()
-            client_instance.__aenter__.return_value = client_instance
-            client_instance.__aexit__.return_value = None
-            client_instance.get = AsyncMock(return_value=mock_response)
-            mock_client_cls.return_value = client_instance
-
+            _install_sequential_get(mock_client_cls, [validate_resp])
             with pytest.raises(CookieValidationError):
                 await validate_and_fetch_profile(cookies)
 
     async def test_missing_c_user_raises_immediately(self):
-        cookies = {"datr": "xyz"}  # no c_user
+        cookies = {"datr": "xyz"}
         with pytest.raises(CookieValidationError):
             await validate_and_fetch_profile(cookies)
 
@@ -145,7 +224,6 @@ class TestValidateAndFetchProfile:
 
     async def test_network_error_raises_validation_error(self):
         cookies = {"c_user": "123", "xs": "abc"}
-
         with patch("httpx.AsyncClient") as mock_client_cls:
             client_instance = AsyncMock()
             client_instance.__aenter__.return_value = client_instance
@@ -154,24 +232,13 @@ class TestValidateAndFetchProfile:
                 side_effect=httpx.ConnectError("connection failed")
             )
             mock_client_cls.return_value = client_instance
-
             with pytest.raises(CookieValidationError):
                 await validate_and_fetch_profile(cookies)
 
-    async def test_non_200_status_raises(self):
+    async def test_non_200_validate_status_raises(self):
         cookies = {"c_user": "123", "xs": "abc"}
-        mock_response = httpx.Response(
-            500,
-            text="server error",
-            request=httpx.Request("GET", "https://m.facebook.com/me"),
-        )
-
+        validate_resp = _make_response(500, text="server error")
         with patch("httpx.AsyncClient") as mock_client_cls:
-            client_instance = AsyncMock()
-            client_instance.__aenter__.return_value = client_instance
-            client_instance.__aexit__.return_value = None
-            client_instance.get = AsyncMock(return_value=mock_response)
-            mock_client_cls.return_value = client_instance
-
+            _install_sequential_get(mock_client_cls, [validate_resp])
             with pytest.raises(CookieValidationError):
                 await validate_and_fetch_profile(cookies)
