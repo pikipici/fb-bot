@@ -41,7 +41,7 @@ def _load_target(post_id: int) -> tuple[str, str]:
         if row is None:
             raise SystemExit(f"trending_posts id={post_id} not found")
         acc = conn.execute(
-            "SELECT display_name, cookies_encrypted FROM fb_accounts "
+            "SELECT fb_name, cookies_encrypted FROM fb_accounts "
             "WHERE status='ACTIVE' ORDER BY id LIMIT 1"
         ).fetchone()
         if acc is None:
@@ -49,7 +49,7 @@ def _load_target(post_id: int) -> tuple[str, str]:
         display_name, enc = acc
         if not display_name:
             raise SystemExit(
-                "fb_account.display_name kosong — harus terisi biar "
+                "fb_account.fb_name kosong — harus terisi biar "
                 "bisa cari 'Comment by <name>' node buat verifikasi"
             )
         return row[0], display_name, decrypt_cookies(enc)
