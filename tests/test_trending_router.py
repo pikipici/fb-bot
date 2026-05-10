@@ -1,0 +1,354 @@
+"""Router tests for /api/v1/trending — list trending posts with filters."""
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from server import auth as auth_module
+from server import database as database_module
+from server.database import Base, get_db
+from server.models import Source, TrendingPost
+
+
+@pytest.fixture
+def client(tmp_path, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET_KEY", "test-secret-please-change")
+    monkeypatch.setenv(
+        "CREDENTIALS_KEY", "WyzJqG3Vg9ZpUyFkq4bUxN9yxMG3xCyq4Rr8s3fL7dE="
+    )
+    monkeypatch.setenv("ENV", "development")
+    auth_module._reset_jwt_secret_cache_for_tests()
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path}/test_trending.db",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(bind=engine)
+    TestingSessionLocal = sessionmaker(
+        autocommit=False, autoflush=False, bind=engine
+    )
+
+    def override_get_db():
+        db = TestingSessionLocal()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    from server.main import app
+
+    app.dependency_overrides[get_db] = override_get_db
+    original_session_local = database_module.SessionLocal
+    database_module.SessionLocal = TestingSessionLocal
+    try:
+        with TestClient(app) as test_client:
+            test_client._session_factory = TestingSessionLocal  # type: ignore[attr-defined]
+            yield test_client
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        database_module.SessionLocal = original_session_local
+        Base.metadata.drop_all(bind=engine)
+        engine.dispose()
+        auth_module._reset_jwt_secret_cache_for_tests()
+
+
+def _register_and_login(
+    client: TestClient,
+    username: str,
+    password: str,
+    role: str | None = None,
+    admin_token: str | None = None,
+) -> str:
+    headers = (
+        {"Authorization": f"Bearer {admin_token}"} if admin_token else {}
+    )
+    body = {"username": username, "password": password}
+    if role:
+        body["role"] = role
+    client.post("/api/v1/auth/register", json=body, headers=headers)
+    resp = client.post(
+        "/api/v1/auth/login",
+        json={"username": username, "password": password},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["access_token"]
+
+
+@pytest.fixture
+def admin_token(client):
+    return _register_and_login(client, "admin", "admin123")
+
+
+@pytest.fixture
+def viewer_token(client, admin_token):
+    return _register_and_login(
+        client, "viewer", "viewer123", role="viewer", admin_token=admin_token
+    )
+
+
+def _auth(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _seed_posts(client: TestClient, posts_spec: list[dict]) -> dict[str, int]:
+    """Insert sources + trending posts directly via the test session.
+
+    ``posts_spec`` entries:
+        source_type, source_label, fb_post_id, status, score,
+        reactions_total, author, text, [post_timestamp]
+
+    Returns a dict mapping ``(source_type, source_label)`` → source_id.
+    """
+    SessionLocal = client._session_factory  # type: ignore[attr-defined]
+    source_ids: dict[tuple[str, str], int] = {}
+    with SessionLocal() as db:
+        for spec in posts_spec:
+            key = (spec["source_type"], spec["source_label"])
+            if key not in source_ids:
+                src = Source(
+                    type=spec["source_type"],
+                    label=spec["source_label"],
+                    fb_entity_id=spec.get("fb_entity_id"),
+                    enabled=True,
+                )
+                db.add(src)
+                db.flush()
+                source_ids[key] = src.id
+            post = TrendingPost(
+                fb_post_id=spec["fb_post_id"],
+                source_id=source_ids[key],
+                author_name=spec.get("author", "someone"),
+                text_snippet=spec.get("text", "hello world"),
+                post_url=spec.get("post_url", "https://fb.com/p/1"),
+                thumbnail_url=spec.get("thumbnail_url"),
+                likes=spec.get("likes", 0),
+                comments=spec.get("comments", 0),
+                shares=spec.get("shares", 0),
+                reactions_total=spec.get("reactions_total", 0),
+                score=spec.get("score", 0.0),
+                velocity=spec.get("velocity", 0.0),
+                status=spec.get("status", "NEW"),
+                post_timestamp=spec.get("post_timestamp"),
+            )
+            db.add(post)
+        db.commit()
+    return {f"{t}|{l}": v for (t, l), v in source_ids.items()}
+
+
+# --- auth guards ---------------------------------------------------------
+
+
+class TestAuthGuards:
+    def test_unauthenticated_list_rejected(self, client):
+        resp = client.get("/api/v1/trending")
+        assert resp.status_code in (401, 403)
+
+    def test_viewer_allowed_to_list(self, client, viewer_token):
+        # Trending is a read-only feed; viewer role should be allowed.
+        resp = client.get("/api/v1/trending", headers=_auth(viewer_token))
+        assert resp.status_code == 200
+
+
+# --- list + ordering -----------------------------------------------------
+
+
+class TestListTrending:
+    def test_empty_list(self, client, admin_token):
+        resp = client.get("/api/v1/trending", headers=_auth(admin_token))
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["posts"] == []
+        assert body["total"] == 0
+
+    def test_orders_by_score_desc_by_default(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p_low", "score": 10.0, "reactions_total": 10},
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p_high", "score": 9999.0, "reactions_total": 9999},
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p_mid", "score": 500.0, "reactions_total": 500},
+            ],
+        )
+        resp = client.get("/api/v1/trending", headers=_auth(admin_token))
+        assert resp.status_code == 200
+        posts = resp.json()["posts"]
+        assert [p["fb_post_id"] for p in posts] == ["p_high", "p_mid", "p_low"]
+
+    def test_embeds_source_label_and_type(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "group", "source_label": "Jual Beli JKT",
+                 "fb_entity_id": "1234", "fb_post_id": "pg1",
+                 "score": 100.0, "reactions_total": 100},
+            ],
+        )
+        resp = client.get("/api/v1/trending", headers=_auth(admin_token))
+        post = resp.json()["posts"][0]
+        assert post["source"]["type"] == "group"
+        assert post["source"]["label"] == "Jual Beli JKT"
+        assert post["source"]["id"] is not None
+
+    def test_exposes_engagement_fields(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p1",
+                 "likes": 120, "comments": 30, "shares": 5,
+                 "reactions_total": 155, "score": 88.5, "velocity": 72.3,
+                 "author": "Contoh User", "text": "halo dunia"},
+            ],
+        )
+        resp = client.get("/api/v1/trending", headers=_auth(admin_token))
+        post = resp.json()["posts"][0]
+        assert post["likes"] == 120
+        assert post["comments"] == 30
+        assert post["shares"] == 5
+        assert post["reactions_total"] == 155
+        assert post["score"] == 88.5
+        assert post["velocity"] == 72.3
+        assert post["author_name"] == "Contoh User"
+        assert post["text_snippet"] == "halo dunia"
+        assert post["status"] == "NEW"
+
+    def test_total_counts_all_rows_matching_filters(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": f"p{i}", "score": float(i),
+                 "reactions_total": i} for i in range(1, 8)
+            ],
+        )
+        resp = client.get(
+            "/api/v1/trending?limit=3", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert len(body["posts"]) == 3
+        assert body["total"] == 7
+
+
+# --- filters -------------------------------------------------------------
+
+
+class TestFilters:
+    def test_filter_by_status(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "pn", "status": "NEW", "score": 100,
+                 "reactions_total": 100},
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "pd", "status": "DRAFTED", "score": 50,
+                 "reactions_total": 50},
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "ps", "status": "SKIPPED", "score": 30,
+                 "reactions_total": 30},
+            ],
+        )
+        resp = client.get(
+            "/api/v1/trending?status=NEW", headers=_auth(admin_token)
+        )
+        assert [p["fb_post_id"] for p in resp.json()["posts"]] == ["pn"]
+
+    def test_filter_by_source_id(self, client, admin_token):
+        ids = _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "h1", "score": 100, "reactions_total": 100},
+                {"source_type": "group", "source_label": "GrupA",
+                 "fb_entity_id": "1", "fb_post_id": "g1", "score": 200,
+                 "reactions_total": 200},
+                {"source_type": "group", "source_label": "GrupB",
+                 "fb_entity_id": "2", "fb_post_id": "g2", "score": 300,
+                 "reactions_total": 300},
+            ],
+        )
+        grup_a_id = ids["group|GrupA"]
+        resp = client.get(
+            f"/api/v1/trending?source_id={grup_a_id}",
+            headers=_auth(admin_token),
+        )
+        assert [p["fb_post_id"] for p in resp.json()["posts"]] == ["g1"]
+
+    def test_sort_by_velocity(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "slow", "score": 9999, "velocity": 1,
+                 "reactions_total": 9999},
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "fast", "score": 1, "velocity": 999,
+                 "reactions_total": 1},
+            ],
+        )
+        resp = client.get(
+            "/api/v1/trending?sort=velocity", headers=_auth(admin_token)
+        )
+        assert [p["fb_post_id"] for p in resp.json()["posts"]] == ["fast", "slow"]
+
+    def test_sort_by_recent_uses_collected_at(self, client, admin_token):
+        # Seed then mutate collected_at to guarantee ordering.
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "old", "score": 100, "reactions_total": 100},
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "new", "score": 10, "reactions_total": 10},
+            ],
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        now = datetime.now(timezone.utc)
+        with SessionLocal() as db:
+            for row in db.query(TrendingPost).all():
+                row.collected_at = (
+                    now - timedelta(hours=2)
+                    if row.fb_post_id == "old"
+                    else now
+                )
+            db.commit()
+        resp = client.get(
+            "/api/v1/trending?sort=recent", headers=_auth(admin_token)
+        )
+        assert [p["fb_post_id"] for p in resp.json()["posts"]] == ["new", "old"]
+
+    def test_invalid_sort_rejected(self, client, admin_token):
+        resp = client.get(
+            "/api/v1/trending?sort=bogus", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 400
+
+    def test_invalid_status_rejected(self, client, admin_token):
+        resp = client.get(
+            "/api/v1/trending?status=INVALID", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 400
+
+    def test_limit_clamped_to_sane_bounds(self, client, admin_token):
+        # Seed 3 rows, request limit=9999 — should still return 3 rows OK.
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": f"p{i}", "score": float(i),
+                 "reactions_total": i} for i in range(3)
+            ],
+        )
+        resp = client.get(
+            "/api/v1/trending?limit=9999", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()["posts"]) == 3
