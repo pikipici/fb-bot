@@ -234,7 +234,81 @@ class FBAccountService:
             "total_uses": account.total_uses,
             "notes": account.notes,
             "created_at": account.created_at.isoformat() if account.created_at else None,
+            # Cookie-session (safe-to-expose) fields.
+            "fb_user_id": account.fb_user_id,
+            "fb_name": account.fb_name,
+            "fb_profile_pic_url": account.fb_profile_pic_url,
+            "cookies_expired_at": (
+                account.cookies_expired_at.isoformat()
+                if account.cookies_expired_at
+                else None
+            ),
+            "has_cookies": bool(account.cookies_encrypted),
         }
         if include_email:
-            result["email"] = decrypt(account.email_encrypted)
+            result["email"] = (
+                decrypt(account.email_encrypted)
+                if account.email_encrypted
+                else None
+            )
         return result
+
+    # --- cookie-session helpers (Layer 1+2) ------------------------------
+
+    def create_cookie_account(
+        self,
+        label: str,
+        cookies: dict[str, str],
+        fb_user_id: str,
+        fb_name: str | None,
+        fb_profile_pic_url: str | None,
+        notes: str = "",
+    ) -> FBAccount:
+        """Create an account connected via cookie session (no email/pw)."""
+        from server.crypto import encrypt_cookies
+
+        account = FBAccount(
+            label=label,
+            email_encrypted=None,
+            password_encrypted=None,
+            cookies_encrypted=encrypt_cookies(cookies),
+            fb_user_id=fb_user_id,
+            fb_name=fb_name,
+            fb_profile_pic_url=fb_profile_pic_url,
+            purpose="both",
+            notes=notes,
+            status="ACTIVE",
+        )
+        self.db.add(account)
+        self.db.commit()
+        self.db.refresh(account)
+        logger.info(
+            "Created cookie-connected FB account %s (id=%d, fb_user_id=%s)",
+            label,
+            account.id,
+            fb_user_id,
+        )
+        return account
+
+    def get_cookies(self, account_id: int) -> dict[str, str] | None:
+        """Decrypt & return the cookie dict for an account (or None)."""
+        from server.crypto import decrypt_cookies
+
+        account = self.get_account(account_id)
+        if not account or not account.cookies_encrypted:
+            return None
+        return decrypt_cookies(account.cookies_encrypted)
+
+    def mark_cookies_expired(self, account_id: int) -> bool:
+        """Mark an account's cookie session as expired.
+
+        Sets ``status='EXPIRED'`` and ``cookies_expired_at=now``. The
+        scanner uses this to pause itself until the user re-connects.
+        """
+        account = self.get_account(account_id)
+        if not account:
+            return False
+        account.status = "EXPIRED"
+        account.cookies_expired_at = datetime.now(timezone.utc)
+        self.db.commit()
+        return True

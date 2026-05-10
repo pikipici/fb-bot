@@ -97,4 +97,16 @@ export const api = {
 
   reactivateFBAccount: (id: number) =>
     request(`/fb-accounts/${id}/reactivate`, { method: 'POST' }),
+
+  previewFBCookie: (rawCookies: string) =>
+    request('/fb-accounts/preview-cookie', {
+      method: 'POST',
+      body: JSON.stringify({ raw_cookies: rawCookies }),
+    }),
+
+  connectFBCookie: (data: { label: string; raw_cookies: string; notes?: string }) =>
+    request('/fb-accounts/connect-cookie', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
 }

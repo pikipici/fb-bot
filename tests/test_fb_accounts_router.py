@@ -337,3 +337,232 @@ class TestGetCurrentAccount:
         body = resp.json()
         assert body["account"] is not None
         assert body["account"]["status"] == "DISABLED"
+
+
+class TestCookiePreview:
+    """POST /fb-accounts/preview-cookie validates & returns profile info
+    WITHOUT saving anything to the DB.
+    """
+
+    def test_preview_happy_path(self, client, admin_token, monkeypatch):
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo(
+                fb_user_id="100001",
+                name="Test User",
+                profile_pic_url="https://fb.test/pic.jpg",
+            )
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            "/api/v1/fb-accounts/preview-cookie",
+            json={"raw_cookies": "c_user=100001; xs=abc"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["preview"]["fb_user_id"] == "100001"
+        assert body["preview"]["name"] == "Test User"
+        assert body["preview"]["profile_pic_url"] == "https://fb.test/pic.jpg"
+
+    def test_preview_invalid_cookie_returns_400(self, client, admin_token, monkeypatch):
+        from server.services.cookie_session_service import (
+            CookieValidationError,
+        )
+
+        async def fake_validate(_cookies):
+            raise CookieValidationError("Cookie expired")
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            "/api/v1/fb-accounts/preview-cookie",
+            json={"raw_cookies": "c_user=bad; xs=bad"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+        assert "Cookie expired" in resp.json()["detail"]
+
+    def test_preview_empty_raw_returns_400(self, client, admin_token):
+        resp = client.post(
+            "/api/v1/fb-accounts/preview-cookie",
+            json={"raw_cookies": ""},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
+    def test_preview_does_not_save(self, client, admin_token, monkeypatch):
+        """Preview must leave the DB untouched even on success."""
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo("100001", "Test User", None)
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        client.post(
+            "/api/v1/fb-accounts/preview-cookie",
+            json={"raw_cookies": "c_user=100001; xs=abc"},
+            headers=_auth(admin_token),
+        )
+        current = client.get(
+            "/api/v1/fb-accounts/current", headers=_auth(admin_token)
+        ).json()
+        assert current["account"] is None
+
+    def test_viewer_cannot_preview(self, client, viewer_token):
+        resp = client.post(
+            "/api/v1/fb-accounts/preview-cookie",
+            json={"raw_cookies": "c_user=1"},
+            headers=_auth(viewer_token),
+        )
+        assert resp.status_code == 403
+
+
+class TestCookieConnect:
+    """POST /fb-accounts/connect-cookie validates cookie, encrypts, saves."""
+
+    def test_connect_happy_path(self, client, admin_token, monkeypatch):
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo(
+                fb_user_id="100001",
+                name="Test User",
+                profile_pic_url="https://fb.test/pic.jpg",
+            )
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={
+                "label": "Main FB",
+                "raw_cookies": "c_user=100001; xs=abc; datr=xyz",
+            },
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201, resp.text
+        body = resp.json()
+        assert body["label"] == "Main FB"
+        assert body["fb_user_id"] == "100001"
+        assert body["fb_name"] == "Test User"
+        assert body["fb_profile_pic_url"] == "https://fb.test/pic.jpg"
+        # Secrets must never be returned.
+        assert "raw_cookies" not in body
+        assert "cookies_encrypted" not in body
+        assert "password" not in body
+
+        # Verify the account is now persisted.
+        current = client.get(
+            "/api/v1/fb-accounts/current", headers=_auth(admin_token)
+        ).json()
+        assert current["account"]["fb_user_id"] == "100001"
+
+    def test_connect_rejects_when_account_already_exists(
+        self, client, admin_token, monkeypatch
+    ):
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo("100001", "Test", None)
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+        client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Old", "email": "e@fb", "password": "p"},
+            headers=_auth(admin_token),
+        )
+        resp = client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={"label": "New", "raw_cookies": "c_user=100001; xs=abc"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 409
+
+    def test_connect_invalid_cookie_returns_400(
+        self, client, admin_token, monkeypatch
+    ):
+        from server.services.cookie_session_service import (
+            CookieValidationError,
+        )
+
+        async def fake_validate(_cookies):
+            raise CookieValidationError("Cookie gak valid")
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={"label": "X", "raw_cookies": "c_user=bad"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
+    def test_connect_empty_label_rejected(self, client, admin_token):
+        resp = client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={"label": "", "raw_cookies": "c_user=1"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
+    def test_connect_persists_encrypted_cookies_and_sets_status_active(
+        self, client, admin_token, monkeypatch
+    ):
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo("100001", "Test", None)
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={"label": "Main", "raw_cookies": "c_user=100001; xs=abc"},
+            headers=_auth(admin_token),
+        )
+        # Fetch via raw DB to confirm cookies_encrypted is populated &
+        # non-empty (we never expose it via API).
+        from server import database as database_module
+        from server.models import FBAccount
+
+        with database_module.SessionLocal() as db:
+            account = db.query(FBAccount).first()
+            assert account is not None
+            assert account.cookies_encrypted
+            assert "c_user" not in account.cookies_encrypted  # encrypted
+            assert account.status == "ACTIVE"
+            assert account.fb_user_id == "100001"
+
+    def test_viewer_cannot_connect(self, client, viewer_token):
+        resp = client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={"label": "X", "raw_cookies": "c_user=1"},
+            headers=_auth(viewer_token),
+        )
+        assert resp.status_code == 403

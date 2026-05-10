@@ -6,6 +6,11 @@ from sqlalchemy.orm import Session
 
 from server.auth import Role, require_role
 from server.database import get_db
+from server.services.cookie_session_service import (
+    CookieValidationError,
+    parse_cookie_string,
+    validate_and_fetch_profile,
+)
 from server.services.fb_account_service import FBAccountService
 
 router = APIRouter(prefix="/fb-accounts", tags=["fb-accounts"])
@@ -29,6 +34,16 @@ class UpdateAccountRequest(BaseModel):
     purpose: str | None = None
     notes: str | None = None
     status: str | None = None
+
+
+class PreviewCookieRequest(BaseModel):
+    raw_cookies: str
+
+
+class ConnectCookieRequest(BaseModel):
+    label: str
+    raw_cookies: str
+    notes: str = ""
 
 
 @router.get("")
@@ -153,4 +168,84 @@ def reactivate_account(
     if not svc.reactivate(account_id):
         raise HTTPException(404, "Account not found")
     account = svc.get_account(account_id)
+    return svc.to_dict(account, include_email=True)
+
+
+# --- Cookie-session endpoints (Layer 1+2) --------------------------------
+
+
+@router.post("/preview-cookie")
+async def preview_cookie(
+    req: PreviewCookieRequest,
+    user=Depends(_admin_only),
+):
+    """Validate a raw cookie string and return the profile it belongs to.
+
+    Does NOT persist anything — it's a dry-run so the dashboard can show
+    the user a confirmation card before committing. The actual save
+    happens via ``POST /fb-accounts/connect-cookie``.
+    """
+    if not req.raw_cookies or not req.raw_cookies.strip():
+        raise HTTPException(400, "raw_cookies kosong")
+
+    cookies = parse_cookie_string(req.raw_cookies)
+    try:
+        profile = await validate_and_fetch_profile(cookies)
+    except CookieValidationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    return {
+        "ok": True,
+        "preview": {
+            "fb_user_id": profile.fb_user_id,
+            "name": profile.name,
+            "profile_pic_url": profile.profile_pic_url,
+        },
+    }
+
+
+@router.post("/connect-cookie", status_code=201)
+async def connect_cookie(
+    req: ConnectCookieRequest,
+    user=Depends(_admin_only),
+    db: Session = Depends(get_db),
+):
+    """Persist a cookie-connected FB account.
+
+    Flow:
+      1. Enforce single-account (409 if one already exists).
+      2. Parse + validate cookies via ``m.facebook.com/me``.
+      3. Encrypt cookies with Fernet and save together with the profile
+         info returned by Facebook.
+
+    Cookies are never returned in the response, only the public profile
+    fields ``fb_user_id`` / ``fb_name`` / ``fb_profile_pic_url``.
+    """
+    if not req.label or not req.label.strip():
+        raise HTTPException(400, "label kosong")
+    if not req.raw_cookies or not req.raw_cookies.strip():
+        raise HTTPException(400, "raw_cookies kosong")
+
+    svc = FBAccountService(db)
+    existing = svc.list_accounts(include_disabled=True)
+    if existing:
+        raise HTTPException(
+            409,
+            "An FB account already exists. Delete the existing one first.",
+        )
+
+    cookies = parse_cookie_string(req.raw_cookies)
+    try:
+        profile = await validate_and_fetch_profile(cookies)
+    except CookieValidationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    account = svc.create_cookie_account(
+        label=req.label.strip(),
+        cookies=cookies,
+        fb_user_id=profile.fb_user_id,
+        fb_name=profile.name,
+        fb_profile_pic_url=profile.profile_pic_url,
+        notes=req.notes,
+    )
     return svc.to_dict(account, include_email=True)
