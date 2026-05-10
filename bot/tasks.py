@@ -25,6 +25,11 @@ from bot.modules.orchestrator import Orchestrator
 from bot.modules.parser import Parser
 from bot.modules.rate_guard import RateGuard
 from bot.modules.scheduler import TargetScheduler
+from bot.modules.source_collector import (
+    CookieExpiredError,
+    SourceCollectorResult,
+    scan_source,
+)
 from server.database import SessionLocal
 
 logger = logging.getLogger(__name__)
@@ -348,3 +353,188 @@ def send_weekly_report(self):  # noqa: ANN001
     except Exception as exc:  # noqa: BLE001
         logger.error("send_weekly_report failed: %s", exc)
         return {"status": "error", "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# Layer 1 scanner — source-based trending scan (cookie session)
+# ---------------------------------------------------------------------------
+
+
+def _pick_active_account(db: Session):
+    """Return the ACTIVE FB account with encrypted cookies, else None."""
+    from server.models import FBAccount
+
+    return (
+        db.query(FBAccount)
+        .filter(
+            FBAccount.status == "ACTIVE",
+            FBAccount.cookies_encrypted.isnot(None),
+        )
+        .order_by(FBAccount.id)
+        .first()
+    )
+
+
+def _mark_cookies_expired(db: Session, account) -> None:
+    account.status = "EXPIRED"
+    account.cookies_expired_at = datetime.now(timezone.utc)
+    db.commit()
+
+
+async def _scan_enabled_sources(
+    sources: list,
+    cookies: dict,
+) -> tuple[list[SourceCollectorResult], bool]:
+    """Run ``scan_source`` for each source sequentially.
+
+    Returns ``(results, cookie_expired)``. When a ``CookieExpiredError``
+    is raised the scan is aborted immediately and we surface the flag
+    so the caller can flip the account to ``EXPIRED`` without trying
+    the remaining sources.
+    """
+    results: list[SourceCollectorResult] = []
+    for src in sources:
+        source_dict = {
+            "id": src.id,
+            "type": src.type,
+            "label": src.label,
+            "url": src.url,
+            "fb_entity_id": src.fb_entity_id,
+        }
+        try:
+            result = await scan_source(source_dict, cookies)
+        except CookieExpiredError as exc:
+            logger.warning(
+                "scan aborted — cookie expired on source %s: %s",
+                src.id,
+                exc,
+            )
+            return results, True
+        results.append(result)
+    return results, False
+
+
+def _run_scan_all_sources(db: Session) -> dict[str, Any]:
+    """Core scan orchestration — pulled out so tests can drive it with a
+    real DB session without going through Celery.
+    """
+    from server.crypto import decrypt_cookies
+    from server.models import Source
+    from server.services.trending_post_service import TrendingPostService
+
+    account = _pick_active_account(db)
+    if account is None:
+        logger.info("scan_all_sources: no ACTIVE account, skipping")
+        return {
+            "aborted": True,
+            "reason": "no_active_account",
+            "enabled_sources": 0,
+            "successful_scans": 0,
+            "scan_errors": 0,
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+        }
+
+    try:
+        cookies = decrypt_cookies(account.cookies_encrypted or "")
+    except Exception as exc:  # noqa: BLE001 — bad key or corrupted row
+        logger.error("scan_all_sources: failed to decrypt cookies: %s", exc)
+        return {
+            "aborted": True,
+            "reason": "cookie_decrypt_failed",
+            "enabled_sources": 0,
+            "successful_scans": 0,
+            "scan_errors": 0,
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+        }
+
+    sources = (
+        db.query(Source)
+        .filter(Source.enabled.is_(True))
+        .order_by(Source.id)
+        .all()
+    )
+
+    if not sources:
+        return {
+            "aborted": False,
+            "enabled_sources": 0,
+            "successful_scans": 0,
+            "scan_errors": 0,
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+        }
+
+    results, cookie_expired = asyncio.run(
+        _scan_enabled_sources(sources, cookies)
+    )
+
+    if cookie_expired:
+        _mark_cookies_expired(db, account)
+        return {
+            "aborted": True,
+            "reason": "cookie_expired",
+            "enabled_sources": len(sources),
+            "successful_scans": sum(1 for r in results if r.success),
+            "scan_errors": sum(1 for r in results if not r.success),
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+        }
+
+    # Upsert posts from successful scans, preserving user status.
+    svc = TrendingPostService(db)
+    inserted = updated = skipped = 0
+    successful = 0
+    scan_errors = 0
+    scan_time = datetime.now(timezone.utc)
+    sources_by_id = {s.id: s for s in sources}
+
+    for result in results:
+        if not result.success:
+            scan_errors += 1
+            continue
+        successful += 1
+        outcome = svc.upsert_batch(result.source_id, result.posts)
+        inserted += outcome.inserted
+        updated += outcome.updated
+        skipped += outcome.skipped
+        source_row = sources_by_id.get(result.source_id)
+        if source_row is not None:
+            source_row.last_scanned_at = scan_time
+
+    db.commit()
+
+    summary = {
+        "aborted": False,
+        "enabled_sources": len(sources),
+        "successful_scans": successful,
+        "scan_errors": scan_errors,
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+    }
+    logger.info("scan_all_sources summary: %s", summary)
+    return summary
+
+
+@app.task(bind=True, max_retries=2, default_retry_delay=60)
+def scan_all_sources(self):  # noqa: ANN001
+    """Celery beat task — scan every enabled source, upsert trending posts.
+
+    Single-account MVP: picks the first ACTIVE ``FBAccount`` with cookies
+    set and uses those for every scan. If any scan raises
+    :class:`CookieExpiredError` we flip the account to ``EXPIRED`` and
+    stop scanning until the user re-connects via the dashboard.
+    """
+    logger.info("scan_all_sources task started")
+    try:
+        with _db_session() as db:
+            return _run_scan_all_sources(db)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("scan_all_sources crashed: %s", exc)
+        return {"aborted": True, "reason": "exception", "error": str(exc)}

@@ -45,6 +45,10 @@ def _collect_interval() -> int:
     return int(os.getenv("COLLECT_INTERVAL_SECONDS", "1800"))  # 30 min default
 
 
+def _scan_interval() -> int:
+    return int(os.getenv("SCAN_INTERVAL_SECONDS", "900"))  # 15 min default
+
+
 def _health_interval() -> int:
     return int(os.getenv("HEALTH_INTERVAL_SECONDS", "300"))  # 5 min default
 
@@ -66,6 +70,10 @@ app.conf.update(
         "collect-all-targets": {
             "task": "bot.tasks.collect_all_targets",
             "schedule": _collect_interval(),
+        },
+        "scan-all-sources": {
+            "task": "bot.tasks.scan_all_sources",
+            "schedule": _scan_interval(),
         },
         "health-check": {
             "task": "bot.tasks.health_check",
