@@ -151,4 +151,20 @@ export const api = {
 
   deleteSource: (id: number) =>
     request(`/sources/${id}`, { method: 'DELETE' }),
+
+  // Trending posts (read-only feed from the scanner)
+  listTrending: (params: {
+    status?: string
+    source_id?: number
+    sort?: 'score' | 'velocity' | 'recent'
+    limit?: number
+  } = {}) => {
+    const q = new URLSearchParams()
+    if (params.status) q.set('status', params.status)
+    if (params.source_id != null) q.set('source_id', String(params.source_id))
+    if (params.sort) q.set('sort', params.sort)
+    if (params.limit != null) q.set('limit', String(params.limit))
+    const qs = q.toString()
+    return request(`/trending${qs ? `?${qs}` : ''}`)
+  },
 }

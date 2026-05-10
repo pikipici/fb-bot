@@ -6,6 +6,7 @@ import Login from './pages/Login'
 import ReviewQueue from './pages/ReviewQueue'
 import FBAccounts from './pages/FBAccounts'
 import Sources from './pages/Sources'
+import Trending from './pages/Trending'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 
@@ -34,6 +35,14 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route
               path="/"
+              element={
+                <ProtectedRoute>
+                  <Trending />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/review"
               element={
                 <ProtectedRoute>
                   <ReviewQueue />
