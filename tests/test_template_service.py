@@ -123,7 +123,14 @@ class TestUpsertActive:
         second = service.upsert_active("v2")
         db_session.refresh(second)
         assert second.id == first_id
-        assert second.updated_at > past
+        # SQLite returns naive datetimes; strip tz for comparison.
+        past_naive = past.replace(tzinfo=None)
+        second_updated_naive = (
+            second.updated_at.replace(tzinfo=None)
+            if second.updated_at.tzinfo
+            else second.updated_at
+        )
+        assert second_updated_naive > past_naive
         # Sanity: it's not identical to the original created-time either.
         assert second.updated_at != first_updated_at or True
 
