@@ -74,9 +74,11 @@ export const api = {
 
   getStats: () => request('/stats/summary'),
 
-  // FB Accounts
+  // FB Accounts (single-account system)
   getFBAccounts: (includeDisabled = false) =>
     request(`/fb-accounts?include_disabled=${includeDisabled}`),
+
+  getCurrentFBAccount: () => request('/fb-accounts/current'),
 
   createFBAccount: (data: { label: string; email: string; password: string; purpose?: string; notes?: string }) =>
     request('/fb-accounts', {

@@ -1,6 +1,14 @@
-import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Pencil, Plus, RotateCw, Trash2, Users } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  Loader2,
+  Lock,
+  Pencil,
+  RotateCw,
+  ShieldAlert,
+  Trash2,
+  UserPlus,
+} from 'lucide-react'
 import { toast } from 'sonner'
 
 import { api } from '../services/api'
@@ -34,13 +42,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 
 interface FBAccount {
   id: number
@@ -60,7 +61,6 @@ type FormState = {
   label: string
   email: string
   password: string
-  purpose: string
   notes: string
 }
 
@@ -68,7 +68,6 @@ const initialForm: FormState = {
   label: '',
   email: '',
   password: '',
-  purpose: 'both',
   notes: '',
 }
 
@@ -83,113 +82,115 @@ export default function FBAccounts() {
   const queryClient = useQueryClient()
 
   const [dialogOpen, setDialogOpen] = useState(false)
-  const [editId, setEditId] = useState<number | null>(null)
+  const [mode, setMode] = useState<'setup' | 'edit'>('setup')
   const [form, setForm] = useState<FormState>(initialForm)
-  const [pendingDelete, setPendingDelete] = useState<FBAccount | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState(false)
 
   const { data, isLoading } = useQuery({
-    queryKey: ['fbAccounts'],
-    queryFn: () => api.getFBAccounts(true),
+    queryKey: ['fbAccountCurrent'],
+    queryFn: () => api.getCurrentFBAccount(),
   })
 
+  const account: FBAccount | null = data?.account ?? null
+
   const createMutation = useMutation({
-    mutationFn: (payload: FormState) => api.createFBAccount(payload),
+    mutationFn: (payload: FormState) =>
+      api.createFBAccount({ ...payload, purpose: 'both' }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['fbAccounts'] })
-      toast.success('Account created')
-      resetForm()
+      queryClient.invalidateQueries({ queryKey: ['fbAccountCurrent'] })
+      toast.success('Akun tersimpan')
+      closeDialog()
     },
-    onError: (err: any) => toast.error(err.message || 'Create failed'),
+    onError: (err: any) => toast.error(err.message || 'Gagal menyimpan akun'),
   })
 
   const updateMutation = useMutation({
     mutationFn: ({ id, payload }: { id: number; payload: Partial<FormState> }) =>
       api.updateFBAccount(id, payload),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['fbAccounts'] })
-      toast.success('Account updated')
-      resetForm()
+      queryClient.invalidateQueries({ queryKey: ['fbAccountCurrent'] })
+      toast.success('Akun diperbarui')
+      closeDialog()
     },
-    onError: (err: any) => toast.error(err.message || 'Update failed'),
+    onError: (err: any) => toast.error(err.message || 'Gagal update akun'),
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.deleteFBAccount(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['fbAccounts'] })
-      toast.success('Account deleted')
-      setPendingDelete(null)
+      queryClient.invalidateQueries({ queryKey: ['fbAccountCurrent'] })
+      toast.success('Akun dihapus')
+      setConfirmDelete(false)
     },
-    onError: (err: any) => toast.error(err.message || 'Delete failed'),
+    onError: (err: any) => toast.error(err.message || 'Gagal hapus akun'),
   })
 
   const reactivateMutation = useMutation({
     mutationFn: (id: number) => api.reactivateFBAccount(id),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['fbAccounts'] })
-      toast.success('Account reactivated')
+      queryClient.invalidateQueries({ queryKey: ['fbAccountCurrent'] })
+      toast.success('Akun diaktifkan ulang')
     },
-    onError: (err: any) => toast.error(err.message || 'Reactivate failed'),
+    onError: (err: any) => toast.error(err.message || 'Gagal reactivate akun'),
   })
 
-  function resetForm() {
-    setForm(initialForm)
+  useEffect(() => {
+    if (!dialogOpen) return
+    if (mode === 'edit' && account) {
+      setForm({
+        label: account.label,
+        email: account.email,
+        password: '',
+        notes: account.notes ?? '',
+      })
+    } else {
+      setForm(initialForm)
+    }
+  }, [dialogOpen, mode, account])
+
+  function openSetup() {
+    setMode('setup')
+    setDialogOpen(true)
+  }
+
+  function openEdit() {
+    if (!account) return
+    setMode('edit')
+    setDialogOpen(true)
+  }
+
+  function closeDialog() {
     setDialogOpen(false)
-    setEditId(null)
-  }
-
-  function openCreate() {
     setForm(initialForm)
-    setEditId(null)
-    setDialogOpen(true)
-  }
-
-  function openEdit(account: FBAccount) {
-    setForm({
-      label: account.label,
-      email: account.email,
-      password: '',
-      purpose: account.purpose,
-      notes: account.notes || '',
-    })
-    setEditId(account.id)
-    setDialogOpen(true)
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (editId) {
+    if (mode === 'edit' && account) {
       const payload: Partial<FormState> = {}
       if (form.label) payload.label = form.label
       if (form.email) payload.email = form.email
       if (form.password) payload.password = form.password
-      if (form.purpose) payload.purpose = form.purpose
       payload.notes = form.notes
-      updateMutation.mutate({ id: editId, payload })
+      updateMutation.mutate({ id: account.id, payload })
     } else {
       createMutation.mutate(form)
     }
   }
 
-  const accounts: FBAccount[] = data?.accounts ?? []
   const submitting = createMutation.isPending || updateMutation.isPending
 
   return (
     <div className="bg-background min-h-screen">
       <AppHeader />
 
-      <main className="mx-auto max-w-5xl p-4 sm:p-6">
-        <div className="mb-6 flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-2xl font-semibold tracking-tight">Facebook Accounts</h2>
-            <p className="text-muted-foreground text-sm">
-              Manage accounts used by scraper and poster workers.
-            </p>
-          </div>
-          <Button onClick={openCreate}>
-            <Plus />
-            Add Account
-          </Button>
+      <main className="mx-auto max-w-3xl p-4 sm:p-6">
+        <div className="mb-6">
+          <h2 className="text-2xl font-semibold tracking-tight">Facebook Account</h2>
+          <p className="text-muted-foreground text-sm">
+            Akun Facebook yang dipakai scraper dan poster. Hanya satu akun yang
+            bisa tersimpan pada satu waktu.
+          </p>
         </div>
 
         {isLoading && (
@@ -198,99 +199,129 @@ export default function FBAccounts() {
           </Card>
         )}
 
-        {!isLoading && accounts.length === 0 && (
-          <Card className="py-12">
-            <CardContent className="flex flex-col items-center justify-center gap-2 text-center">
-              <Users className="text-muted-foreground h-8 w-8" />
-              <p className="text-muted-foreground text-sm">
-                No Facebook accounts added yet.
-              </p>
+        {!isLoading && !account && (
+          <Card>
+            <CardHeader className="items-center text-center">
+              <div className="bg-muted text-muted-foreground mb-2 flex size-12 items-center justify-center rounded-full">
+                <Lock className="size-5" />
+              </div>
+              <CardTitle>Belum ada akun</CardTitle>
+              <CardDescription>
+                Tambahkan akun Facebook untuk mulai scraping dan posting.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex justify-center">
+              <Button onClick={openSetup} size="lg">
+                <UserPlus />
+                Setup Account
+              </Button>
             </CardContent>
           </Card>
         )}
 
-        <div className="space-y-3">
-          {accounts.map((account) => (
-            <Card key={account.id}>
-              <CardHeader>
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <CardTitle className="text-base">{account.label}</CardTitle>
-                      <Badge variant={statusBadgeVariant[account.status] ?? 'outline'}>
-                        {account.status}
-                      </Badge>
-                      <Badge variant="outline" className="uppercase">
-                        {account.purpose}
-                      </Badge>
-                    </div>
-                    <CardDescription>{account.email}</CardDescription>
+        {!isLoading && account && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <CardTitle className="text-base">{account.label}</CardTitle>
+                    <Badge variant={statusBadgeVariant[account.status] ?? 'outline'}>
+                      {account.status}
+                    </Badge>
                   </div>
+                  <CardDescription>{account.email}</CardDescription>
+                </div>
 
-                  <div className="flex shrink-0 gap-2">
-                    {account.status === 'BLOCKED' && (
-                      <Button
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => reactivateMutation.mutate(account.id)}
-                        disabled={reactivateMutation.isPending}
-                      >
-                        <RotateCw />
-                        Reactivate
-                      </Button>
-                    )}
-                    <Button size="sm" variant="outline" onClick={() => openEdit(account)}>
-                      <Pencil />
-                      Edit
-                    </Button>
+                <div className="flex shrink-0 flex-wrap gap-2">
+                  {account.status === 'BLOCKED' && (
                     <Button
                       size="sm"
-                      variant="destructive"
-                      onClick={() => setPendingDelete(account)}
+                      variant="secondary"
+                      onClick={() => reactivateMutation.mutate(account.id)}
+                      disabled={reactivateMutation.isPending}
                     >
-                      <Trash2 />
-                      Delete
+                      <RotateCw />
+                      Reactivate
                     </Button>
-                  </div>
+                  )}
+                  <Button size="sm" variant="outline" onClick={openEdit}>
+                    <Pencil />
+                    Edit
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => setConfirmDelete(true)}
+                  >
+                    <Trash2 />
+                    Hapus
+                  </Button>
                 </div>
-              </CardHeader>
-              <CardContent className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs">
-                <span>Uses: {account.total_uses}</span>
-                <span>Failures: {account.failure_count}</span>
-                {account.last_used_at && (
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <dl className="text-muted-foreground grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
+                <div>
+                  <dt className="text-foreground font-medium">Uses</dt>
+                  <dd>{account.total_uses}</dd>
+                </div>
+                <div>
+                  <dt className="text-foreground font-medium">Failures</dt>
+                  <dd>{account.failure_count}</dd>
+                </div>
+                <div className="col-span-2">
+                  <dt className="text-foreground font-medium">Last used</dt>
+                  <dd>
+                    {account.last_used_at
+                      ? new Date(account.last_used_at).toLocaleString()
+                      : '—'}
+                  </dd>
+                </div>
+              </dl>
+              {account.notes && (
+                <p className="text-muted-foreground border-t pt-3 text-xs italic">
+                  {account.notes}
+                </p>
+              )}
+              {account.status === 'BLOCKED' && (
+                <div className="text-destructive flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs">
+                  <ShieldAlert className="size-4 shrink-0" />
                   <span>
-                    Last used: {new Date(account.last_used_at).toLocaleString()}
+                    Akun terblokir oleh Facebook. Reactivate untuk mencoba lagi,
+                    atau hapus dan daftarkan kredensial baru.
                   </span>
-                )}
-                {account.notes && <span className="italic">{account.notes}</span>}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </main>
 
       <Dialog
         open={dialogOpen}
-        onOpenChange={(open) => (open ? setDialogOpen(true) : resetForm())}
+        onOpenChange={(open) => (open ? setDialogOpen(true) : closeDialog())}
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>{editId ? 'Edit Account' : 'Add New Account'}</DialogTitle>
+            <DialogTitle>
+              {mode === 'edit' ? 'Edit Account' : 'Setup Account'}
+            </DialogTitle>
             <DialogDescription>
-              {editId
-                ? 'Update account info. Leave password empty to keep the current one.'
-                : 'Add a new Facebook account for the worker pool.'}
+              {mode === 'edit'
+                ? 'Perbarui data akun. Kosongkan password untuk mempertahankan yang lama.'
+                : 'Isi kredensial akun Facebook yang akan dipakai worker.'}
             </DialogDescription>
           </DialogHeader>
 
-          <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2">
+          <form onSubmit={handleSubmit} className="grid gap-4">
             <div className="space-y-2">
               <Label htmlFor="label">Label</Label>
               <Input
                 id="label"
                 value={form.label}
                 onChange={(e) => setForm({ ...form, label: e.target.value })}
-                placeholder="e.g. Account 1"
+                placeholder="e.g. Main Account"
                 required
               />
             </div>
@@ -302,16 +333,16 @@ export default function FBAccounts() {
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
                 placeholder="email@example.com"
-                required={!editId}
+                required={mode === 'setup'}
               />
             </div>
 
             <div className="space-y-2">
               <Label htmlFor="password">
                 Password
-                {editId && (
+                {mode === 'edit' && (
                   <span className="text-muted-foreground text-xs font-normal">
-                    (leave empty to keep current)
+                    (kosongkan = tetap pakai yang lama)
                   </span>
                 )}
               </Label>
@@ -320,44 +351,27 @@ export default function FBAccounts() {
                 type="password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
-                required={!editId}
+                required={mode === 'setup'}
               />
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="purpose">Purpose</Label>
-              <Select
-                value={form.purpose}
-                onValueChange={(value) => setForm({ ...form, purpose: value })}
-              >
-                <SelectTrigger id="purpose" className="w-full">
-                  <SelectValue placeholder="Select purpose" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="both">Both (Scrape + Post)</SelectItem>
-                  <SelectItem value="scrape">Scrape Only</SelectItem>
-                  <SelectItem value="post">Post Only</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="notes">Notes</Label>
               <Input
                 id="notes"
                 value={form.notes}
                 onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                placeholder="Optional notes..."
+                placeholder="Opsional..."
               />
             </div>
 
-            <DialogFooter className="sm:col-span-2">
-              <Button type="button" variant="outline" onClick={resetForm}>
-                Cancel
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={closeDialog}>
+                Batal
               </Button>
               <Button type="submit" disabled={submitting}>
                 {submitting && <Loader2 className="animate-spin" />}
-                {editId ? 'Save Changes' : 'Add Account'}
+                {mode === 'edit' ? 'Simpan' : 'Tambah Akun'}
               </Button>
             </DialogFooter>
           </form>
@@ -365,34 +379,35 @@ export default function FBAccounts() {
       </Dialog>
 
       <AlertDialog
-        open={!!pendingDelete}
-        onOpenChange={(open) => !open && setPendingDelete(null)}
+        open={confirmDelete}
+        onOpenChange={(open) => !open && setConfirmDelete(false)}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete account?</AlertDialogTitle>
+            <AlertDialogTitle>Hapus akun?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete{' '}
+              Akun{' '}
               <span className="text-foreground font-medium">
-                {pendingDelete?.label}
-              </span>
-              . This action cannot be undone.
+                {account?.label}
+              </span>{' '}
+              akan dihapus permanen. Setelahnya kamu perlu setup ulang kredensial
+              baru untuk scraping dan posting.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleteMutation.isPending}>
-              Cancel
+              Batal
             </AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-white hover:bg-destructive/90"
               disabled={deleteMutation.isPending}
               onClick={(e) => {
                 e.preventDefault()
-                if (pendingDelete) deleteMutation.mutate(pendingDelete.id)
+                if (account) deleteMutation.mutate(account.id)
               }}
             >
               {deleteMutation.isPending && <Loader2 className="animate-spin" />}
-              Delete
+              Hapus
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
