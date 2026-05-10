@@ -125,6 +125,18 @@ _LEAVE_A_COMMENT_BUTTON = (
     'div[role="button"][aria-label="Beri komentar"]'
 )
 
+# Some FB surfaces (notably the photo viewer dialog at ``/photo/?fbid=...``)
+# render the expand-composer stub as a ``<div role="button">`` with no
+# ``aria-label`` — the only affordance is the visible text. Probe via
+# :meth:`page.get_by_text` against these known locale variants.
+_LEAVE_A_COMMENT_TEXTS: tuple[str, ...] = (
+    "Komentari",
+    "Leave a comment",
+    "Tulis komentar",
+    "Beri komentar",
+    "Komen",
+)
+
 _POST_COMMENT_BUTTON = (
     'div[role="button"][aria-label="Post comment"],'
     'div[role="button"][aria-label="Kirim komentar"],'
@@ -228,6 +240,19 @@ async def _find_composer(page: Any) -> Any | None:
             await page.wait_for_timeout(800)
         except Exception:
             pass
+    else:
+        # Photo-viewer / dialog-rendered posts expose the expand stub as a
+        # div[role="button"] with innerText only — no aria-label. Locate it
+        # by visible text instead.
+        for label in _LEAVE_A_COMMENT_TEXTS:
+            try:
+                text_btn = page.get_by_text(label, exact=True).first
+                if await text_btn.count() > 0:
+                    await text_btn.click(timeout=3_000)
+                    await page.wait_for_timeout(1000)
+                    break
+            except Exception:
+                continue
 
     try:
         found = await page.wait_for_selector(
