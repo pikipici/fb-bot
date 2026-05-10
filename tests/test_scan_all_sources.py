@@ -152,9 +152,15 @@ class TestScanAllSourcesLogic:
         assert scan_mock.await_count == 1
 
     def test_no_active_account_aborts_gracefully(
-        self, db, sources, monkeypatch
+        self, db, monkeypatch
     ):
+        """No account seeded at all — scan must abort cleanly."""
         from bot.tasks import _run_scan_all_sources
+
+        # Seed a source so query returns rows, proving the early return
+        # is driven by the account check not an empty source list.
+        db.add(Source(type="home_feed", label="B", enabled=True))
+        db.commit()
 
         scan_mock = AsyncMock()
         monkeypatch.setattr("bot.tasks.scan_source", scan_mock)
