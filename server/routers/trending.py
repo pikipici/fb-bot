@@ -1,33 +1,29 @@
-"""Router — read-only trending posts feed.
+"""Router — read-only trending posts feed + draft/skip status transitions.
 
-``GET /api/v1/trending`` — list trending posts surfaced by the scanner.
+``GET /api/v1/trending`` — list trending posts (any auth role).
+``POST /api/v1/trending/{post_id}/draft`` — admin-only, render the active
+template against the post and flip status to ``DRAFTED``. Returns the
+rendered draft text for the UI to show in an editable textarea.
+``POST /api/v1/trending/{post_id}/skip`` — admin-only, set status to
+``SKIPPED``. Skip is a purely local action; FB is not touched.
 
-All authenticated roles (viewer / operator / admin) may read. Writes
-are not exposed here; post status mutations happen through the
-comment-draft flow in a later phase.
-
-Query params:
-- ``status`` — ``NEW`` | ``DRAFTED`` | ``SKIPPED`` | ``COMMENTED``. Default: no filter.
-- ``source_id`` — filter by a specific source row.
-- ``sort`` — ``score`` (default) | ``velocity`` | ``recent`` (collected_at desc).
-- ``limit`` — max rows returned, default 50, hard capped at 200.
-
-Response envelope::
-
-    {
-        "posts": [{...}],
-        "total": <int>  # count of rows matching filters, independent of limit
-    }
+Status transition rules for ``/draft``:
+- ``NEW`` / ``DRAFTED`` / ``SKIPPED`` may be drafted (or re-drafted).
+- ``COMMENTED`` is terminal; trying to draft it returns 409.
+- Missing active template → 400.
+- Missing post row → 404.
 """
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
-from server.auth import get_current_user
+from server.auth import Role, get_current_user, require_role
 from server.database import get_db
 from server.models import Source, TrendingPost
+from server.services.template_service import TemplateService, render_template
 
 router = APIRouter(prefix="/trending", tags=["trending"])
 
@@ -35,6 +31,8 @@ _VALID_SORTS = {"score", "velocity", "recent"}
 _VALID_STATUSES = {"NEW", "DRAFTED", "SKIPPED", "COMMENTED"}
 _MAX_LIMIT = 200
 _DEFAULT_LIMIT = 50
+
+_admin_only = require_role(Role.ADMIN)
 
 
 def _serialize(post: TrendingPost, source: Source | None) -> dict:
@@ -131,3 +129,80 @@ def list_trending(
         _serialize(row, sources_by_id.get(row.source_id)) for row in rows
     ]
     return {"posts": posts, "total": int(total)}
+
+
+def _load_post_or_404(db: Session, post_id: int) -> TrendingPost:
+    post = db.query(TrendingPost).filter(TrendingPost.id == post_id).first()
+    if post is None:
+        raise HTTPException(status_code=404, detail="Post gak ketemu")
+    return post
+
+
+@router.post("/{post_id}/draft")
+def generate_draft(
+    post_id: int,
+    user=Depends(_admin_only),
+    db: Session = Depends(get_db),
+):
+    """Render the active template and flip post to ``DRAFTED``.
+
+    Allows re-drafting from ``NEW`` / ``DRAFTED`` / ``SKIPPED``, but
+    rejects ``COMMENTED`` as terminal.
+    """
+    post = _load_post_or_404(db, post_id)
+    if post.status == "COMMENTED":
+        raise HTTPException(
+            status_code=409,
+            detail="Post udah COMMENTED, gak bisa di-draft ulang.",
+        )
+
+    template = TemplateService(db).get_active()
+    if template is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Belum ada template aktif — isi dulu di halaman Template."
+            ),
+        )
+
+    draft_text = render_template(
+        template.template_text,
+        author_name=post.author_name,
+        text_snippet=post.text_snippet,
+    )
+
+    post.status = "DRAFTED"
+    db.commit()
+    db.refresh(post)
+
+    source = (
+        db.query(Source).filter(Source.id == post.source_id).first()
+        if post.source_id is not None
+        else None
+    )
+    return {"draft_text": draft_text, "post": _serialize(post, source)}
+
+
+@router.post("/{post_id}/skip")
+def skip_post(
+    post_id: int,
+    user=Depends(_admin_only),
+    db: Session = Depends(get_db),
+):
+    """Mark post as ``SKIPPED`` locally (no FB interaction)."""
+    post = _load_post_or_404(db, post_id)
+    if post.status == "COMMENTED":
+        raise HTTPException(
+            status_code=409,
+            detail="Post udah COMMENTED, gak bisa di-skip.",
+        )
+    post.status = "SKIPPED"
+    db.commit()
+    db.refresh(post)
+
+    source = (
+        db.query(Source).filter(Source.id == post.source_id).first()
+        if post.source_id is not None
+        else None
+    )
+    return {"post": _serialize(post, source)}
