@@ -83,13 +83,25 @@ def matches_keyword_filter(
         text: raw post text. ``None`` is treated as empty.
         include: at least one of these must appear when non-empty.
         exclude: none of these may appear.
+
+    A non-empty ``include`` iterable that normalizes to zero valid
+    keywords (e.g. ``["", "  "]``) is treated as an intentional filter
+    request with no valid matches and rejects everything — rather than
+    silently ignoring the filter and passing posts through.
     """
-    include_list = _normalize_keywords(include)
-    exclude_list = _normalize_keywords(exclude)
+    include_raw_list = list(include) if include is not None else []
+    exclude_raw_list = list(exclude) if exclude is not None else []
+    include_list = _normalize_keywords(include_raw_list)
+    exclude_list = _normalize_keywords(exclude_raw_list)
     body = text or ""
 
     # Exclude wins: short-circuit before checking include.
     if exclude_list and _any_keyword_matches(body, exclude_list):
+        return False
+
+    if include_raw_list and not include_list:
+        # Caller explicitly provided include terms, but none were valid
+        # strings — treat as "filter active, nothing qualifies".
         return False
 
     if not include_list:
