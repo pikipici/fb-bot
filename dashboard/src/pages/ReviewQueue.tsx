@@ -1,7 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
-import { useAuthStore } from '../store/authStore'
+import { CheckCircle2, Inbox, Loader2, XCircle } from 'lucide-react'
+import { toast } from 'sonner'
+
 import { api } from '../services/api'
-import { useNavigate } from 'react-router-dom'
+import { useAuthStore } from '../store/authStore'
+import { AppHeader } from '@/components/app-header'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 
 interface Draft {
   id: number
@@ -13,109 +25,108 @@ interface Draft {
 }
 
 export default function ReviewQueue() {
-  const { username, role, logout } = useAuthStore()
-  const navigate = useNavigate()
+  const role = useAuthStore((s) => s.role)
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['pendingDrafts'],
     queryFn: () => api.getPendingDrafts(),
   })
 
-  const handleAction = async (draftId: number, action: string) => {
+  const handleAction = async (draftId: number, action: 'approve' | 'reject') => {
     try {
       await api.approveDraft(draftId, action)
+      toast.success(action === 'approve' ? 'Draft approved' : 'Draft rejected')
       refetch()
     } catch (err: any) {
-      alert(err.message || 'Action failed')
+      toast.error(err.message || 'Action failed')
     }
   }
 
-  const handleLogout = () => {
-    logout()
-    navigate('/login')
-  }
-
-  const drafts: Draft[] = data?.drafts || []
+  const drafts: Draft[] = data?.drafts ?? []
+  const canReview = role === 'operator' || role === 'admin'
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      {/* Header */}
-      <header className="bg-gray-800 border-b border-gray-700 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <h1 className="text-lg font-bold">FB Engagement Assistant</h1>
-          <nav className="flex gap-2 text-sm">
-            <button className="text-white bg-gray-700 px-2 py-1 rounded">Review</button>
-            {role === 'admin' && (
-              <button
-                onClick={() => navigate('/accounts')}
-                className="text-gray-400 hover:text-white px-2 py-1"
-              >
-                Accounts
-              </button>
-            )}
-          </nav>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-400">
-            {username} <span className="text-xs bg-gray-700 px-2 py-0.5 rounded">{role}</span>
-          </span>
-          <button
-            onClick={handleLogout}
-            className="text-sm text-red-400 hover:text-red-300"
-          >
-            Logout
-          </button>
-        </div>
-      </header>
+    <div className="bg-background min-h-screen">
+      <AppHeader />
 
-      {/* Content */}
-      <main className="max-w-4xl mx-auto p-6">
-        <h2 className="text-xl font-semibold mb-4">Review Queue</h2>
-
-        {isLoading && <p className="text-gray-400">Loading drafts...</p>}
-
-        {!isLoading && drafts.length === 0 && (
-          <div className="bg-gray-800 rounded-lg p-8 text-center text-gray-400">
-            No pending drafts to review.
+      <main className="mx-auto max-w-4xl p-4 sm:p-6">
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight">Review Queue</h2>
+            <p className="text-muted-foreground text-sm">
+              Approve or reject pending drafts before they go live.
+            </p>
           </div>
+          {!isLoading && drafts.length > 0 && (
+            <Badge variant="secondary" className="h-6">
+              {drafts.length} pending
+            </Badge>
+          )}
+        </div>
+
+        {isLoading && (
+          <Card className="flex items-center justify-center py-12">
+            <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
+          </Card>
         )}
 
-        <div className="space-y-4">
-          {drafts.map((draft) => (
-            <div key={draft.id} className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-2">
-                    <span className="text-xs bg-blue-900 text-blue-300 px-2 py-0.5 rounded">
-                      {draft.source_type}
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      Post #{draft.post_id}
-                    </span>
-                  </div>
-                  <p className="text-gray-200">
-                    {draft.text || <span className="italic text-gray-500">No draft text (needs manual write)</span>}
-                  </p>
-                </div>
+        {!isLoading && drafts.length === 0 && (
+          <Card className="py-12">
+            <CardContent className="flex flex-col items-center justify-center gap-2 text-center">
+              <Inbox className="text-muted-foreground h-8 w-8" />
+              <p className="text-muted-foreground text-sm">
+                No pending drafts to review.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
-                {(role === 'operator' || role === 'admin') && draft.text && (
-                  <div className="flex gap-2 shrink-0">
-                    <button
+        <div className="space-y-3">
+          {drafts.map((draft) => (
+            <Card key={draft.id}>
+              <CardHeader>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Badge variant="secondary" className="uppercase">
+                      {draft.source_type}
+                    </Badge>
+                    <CardDescription>Post #{draft.post_id}</CardDescription>
+                  </div>
+                  <span className="text-muted-foreground text-xs">
+                    {new Date(draft.created_at).toLocaleString()}
+                  </span>
+                </div>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <CardTitle className="text-foreground text-base leading-relaxed font-normal">
+                  {draft.text || (
+                    <span className="text-muted-foreground italic">
+                      No draft text (needs manual write)
+                    </span>
+                  )}
+                </CardTitle>
+
+                {canReview && draft.text && (
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      size="sm"
                       onClick={() => handleAction(draft.id, 'approve')}
-                      className="px-3 py-1.5 bg-green-700 hover:bg-green-600 rounded text-sm font-medium transition-colors"
                     >
+                      <CheckCircle2 />
                       Approve
-                    </button>
-                    <button
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
                       onClick={() => handleAction(draft.id, 'reject')}
-                      className="px-3 py-1.5 bg-red-700 hover:bg-red-600 rounded text-sm font-medium transition-colors"
                     >
+                      <XCircle />
                       Reject
-                    </button>
+                    </Button>
                   </div>
                 )}
-              </div>
-            </div>
+              </CardContent>
+            </Card>
           ))}
         </div>
       </main>
