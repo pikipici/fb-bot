@@ -285,7 +285,7 @@ Desain sederhana: 1 endpoint `POST /fb-accounts/connect` body `{label, raw_cooki
 
 ## Phase D — Scanner & Scorer
 
-### Task D1: Playwright Cookie Injection Helper `[ ]`
+### Task D1: Playwright Cookie Injection Helper `[x]`
 
 **Objective:** Helper yang load decrypted cookies ke Playwright context sebelum scrape.
 
@@ -302,7 +302,7 @@ async def create_session_context(cookies_dict: dict, user_agent: str) -> Browser
 
 ---
 
-### Task D2: Scanner Refactor — Source-Based `[ ]`
+### Task D2: Scanner Refactor — Source-Based `[x]`
 
 **Objective:** Refactor `bot/modules/collector.py` supaya accept `Source` model sebagai input (bukan targets.json). Support 3 types:
 - `home_feed` → `https://www.facebook.com/?sk=h_chr` (chronological) scroll 3x, extract post
@@ -325,7 +325,7 @@ async def create_session_context(cookies_dict: dict, user_agent: str) -> Browser
 
 ---
 
-### Task D3: Scorer — Trending Heuristic `[ ]`
+### Task D3: Scorer — Trending Heuristic `[x]`
 
 **Objective:** Tambah `score_trending(post: RawPost) -> tuple[score, velocity]` function. Default formula MVP:
 
@@ -353,7 +353,7 @@ is_trending = (
 
 ---
 
-### Task D4: Keyword Filter `[ ]`
+### Task D4: Keyword Filter `[x]`
 
 **Objective:** Filter post berdasarkan `source.keywords_include` dan `keywords_exclude`. Case-insensitive, word boundary match.
 
@@ -370,7 +370,7 @@ is_trending = (
 
 ---
 
-### Task D5: Scanner Celery Task `[ ]`
+### Task D5: Scanner Celery Task `[x]`
 
 **Objective:** Task `scan_all_sources` yang jalan tiap 15 menit. Flow: load sources enabled → loop → collector.scrape(source) → keyword_filter → scorer → upsert ke `trending_posts`.
 
@@ -385,7 +385,7 @@ is_trending = (
 
 ---
 
-### Task D6: Cookie Expiry Detection `[ ]`
+### Task D6: Cookie Expiry Detection `[x]`
 
 **Objective:** Kalau collector detect redirect ke login / response kosong karena unauth, mark `FBAccount.status = EXPIRED` + set `cookies_expired_at = now`. Task berhenti bekerja sampai user re-connect.
 
