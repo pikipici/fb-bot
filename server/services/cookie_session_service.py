@@ -149,9 +149,10 @@ async def _fetch_profile_picture(
     """Resolve profile picture URL via the public graph redirect gateway.
 
     The endpoint is unauthenticated and returns JSON in the form
-    ``{"data": {"url": "...", "is_silhouette": bool, ...}}``. Silhouette
-    placeholders are still valid URLs; we persist them so the UI can
-    show a consistent avatar.
+    ``{"data": {"url": "...", "is_silhouette": bool, ...}}``. When
+    ``is_silhouette`` is true the URL points at FB's generic grey
+    placeholder — we treat that as "no avatar set" and return ``None``
+    so the UI can show its own local placeholder instead.
     """
     try:
         response = await client.get(
@@ -166,6 +167,8 @@ async def _fetch_profile_picture(
     except ValueError:
         return None
     data = payload.get("data") or {}
+    if data.get("is_silhouette") is True:
+        return None
     url = data.get("url")
     return url if isinstance(url, str) and url else None
 
