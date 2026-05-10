@@ -73,14 +73,13 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 
 | Tanggal | Status | Summary |
 |---------|--------|---------|
-| 2026-05-09 | server setup | Fase 0 skeleton: struktur folder, config JSON, bot modules (scorer, draft_engine, collector, circuit_breaker, rate_guard, recovery, notifier, logger), server (FastAPI + auth + RBAC + models + routers), venv + dependencies installed, DB initialized. Path: `/home/ubuntu/fb-bot` di rdpkhorur. |
-| 2026-05-09 | git setup | Local repo `D:\program\facebook-bot`, remote `git@github.com:pikipici/fb-bot.git`, pushed ke GitHub. Workflow: local = coding + git only, rdpkhorur = runtime + deploy. |
-| 2026-05-09 | fase 1 done | Auth router (login/refresh/register/me), user service, RBAC, Alembic migration, 24 tests passed. Minimal React dashboard (login + review queue) with Tailwind + Zustand + TanStack Query. Commit `f6ae303`. |
 | 2026-05-09 | fase 2 done | Scoring engine (fixed risk formula), detector (keyword/risk/language/duplicate), pipeline (filter→score→queue), post service (DB CRUD). 47 tests passed. Commit `3c638c0`. |
 | 2026-05-09 | fase 3 done | Draft engine (fallback chain + validator + fingerprint + randomization), draft service (DB + approval + audit log), orchestrator (full cycle), API routers wired to real DB. 93 tests passed. Commit `03edb51`. |
 | 2026-05-09 | fase 4 done | Parser (scrape+API normalize, engagement K/M, relative timestamps, lang detect), Scheduler (priority+cooldown+CB filter), Collector enhanced (Playwright scrape, Graph API, block detection, dedup), Celery app+tasks (beat schedule, collect_all/single). 164 tests passed. Commit `47fc043`. |
 | 2026-05-09 | fase 5 done | AI Generator (OpenAI+Ollama dual provider, prompt builder from ai_prompts.json, retry+timeout, env config), DraftEngine wired (_try_ai_draft calls AI generator with async bridge, fallback on fail/invalid), feature-flag gated. 188 tests passed. Commit `5a880ed`. |
 | 2026-05-09 | deploy+monitoring | Deploy setup (systemd services, nginx, deploy.sh, .env.example), Sentry integration (FastAPI + Celery worker), Telegram notifier enhanced (daily/weekly reports, block/error/health alerts). Redis on port 6382. 204 tests passed. Commit `26c047b`. |
+| 2026-05-09 | audit+fix fase A-F | Full-codebase audit (bot/server/dashboard). 43 security + 50 logic issues. Fixes: celery task contract (`58ad096`), security baseline JWT/Fernet/WS-header (fase B), data correctness scorer/parser/TZ/alembic FK (`a4c8235`), concurrency rate_guard/with_for_update/dedup-lock (fase D), ops hardening MarkdownV2/rotating-logs/atomic-recovery (`d534323`), regression tests CB/notifier/recovery (`84e7d6d`). |
+| 2026-05-10 | fase G deploy live | Root-cause server DB kosong (001 stamped tanpa tables) + worker crash `ModuleNotFoundError: server`. Fix: `alembic stamp base && alembic upgrade head` (8 tables fresh), systemd drop-in `pythonpath.conf` di worker+beat. Scorer freshness accept ISO string (`cf5b9f3`), test align draft/rate_guard dgn phase-D contract (`5ae32ee`). 274 tests passed. api+worker+beat active, `/api/v1/health` 200. HEAD `5ae32ee`. |
 
 ## Git Conventions
 
