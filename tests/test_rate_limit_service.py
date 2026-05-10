@@ -166,11 +166,15 @@ class TestWindowStats:
 
         stats = service.window_stats()
         assert stats["resets_at"] is not None
-        expected = oldest.sent_at + timedelta(hours=6)
+        oldest_sent = oldest.sent_at
+        if oldest_sent.tzinfo is None:
+            oldest_sent = oldest_sent.replace(tzinfo=timezone.utc)
+        expected = oldest_sent + timedelta(hours=6)
+        resets = stats["resets_at"]
+        if resets.tzinfo is None:
+            resets = resets.replace(tzinfo=timezone.utc)
         # tolerate 5s drift
-        delta = abs(
-            (stats["resets_at"] - expected).total_seconds()
-        )
+        delta = abs((resets - expected).total_seconds())
         assert delta < 5
 
     def test_resets_at_none_when_empty(self, service):
