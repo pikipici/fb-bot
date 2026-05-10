@@ -26,14 +26,13 @@ from server.routers import (
     approvals,
     auth,
     drafts,
+    fb_accounts,
     health,
     posts,
     reports,
     settings,
     stats,
 )
-# DISABLED: multi-account rotation — using single account from .env
-# from server.routers import fb_accounts
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +94,7 @@ app.include_router(approvals.router, prefix="/api/v1", tags=["approvals"])
 app.include_router(stats.router, prefix="/api/v1", tags=["stats"])
 app.include_router(settings.router, prefix="/api/v1", tags=["settings"])
 app.include_router(reports.router, prefix="/api/v1", tags=["reports"])
-# DISABLED: multi-account rotation — using single account from .env
-# app.include_router(fb_accounts.router, prefix="/api/v1", tags=["fb-accounts"])
+app.include_router(fb_accounts.router, prefix="/api/v1", tags=["fb-accounts"])
 
 # Serve dashboard static files (production build)
 DASHBOARD_DIR = (Path(__file__).parent.parent / "dashboard" / "dist").resolve()

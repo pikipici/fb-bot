@@ -45,8 +45,14 @@ export default function ReviewQueue() {
           <h1 className="text-lg font-bold">FB Engagement Assistant</h1>
           <nav className="flex gap-2 text-sm">
             <button className="text-white bg-gray-700 px-2 py-1 rounded">Review</button>
-            {/* DISABLED: multi-account rotation — using single account from .env */}
-            {/* <button onClick={() => navigate('/accounts')} className="text-gray-400 hover:text-white px-2 py-1">Accounts</button> */}
+            {role === 'admin' && (
+              <button
+                onClick={() => navigate('/accounts')}
+                className="text-gray-400 hover:text-white px-2 py-1"
+              >
+                Accounts
+              </button>
+            )}
           </nav>
         </div>
         <div className="flex items-center gap-4">
