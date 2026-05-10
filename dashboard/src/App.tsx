@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import {
   QueryCache,
@@ -6,18 +7,24 @@ import {
   MutationCache,
 } from '@tanstack/react-query'
 import { toast } from 'sonner'
+import { Loader2 } from 'lucide-react'
 
 import { useAuthStore } from './store/authStore'
-import Login from './pages/Login'
-import ReviewQueue from './pages/ReviewQueue'
-import FBAccounts from './pages/FBAccounts'
-import Sources from './pages/Sources'
-import Trending from './pages/Trending'
-import Template from './pages/Template'
-import History from './pages/History'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 import { ErrorBoundary } from '@/components/error-boundary'
+
+// Login is the only route rendered pre-auth — keep it eager so the
+// initial bundle can boot to it instantly. Everything else lazy-loads
+// on first navigation so the initial JS payload stays small.
+import Login from './pages/Login'
+
+const Trending = lazy(() => import('./pages/Trending'))
+const ReviewQueue = lazy(() => import('./pages/ReviewQueue'))
+const History = lazy(() => import('./pages/History'))
+const FBAccounts = lazy(() => import('./pages/FBAccounts'))
+const Sources = lazy(() => import('./pages/Sources'))
+const Template = lazy(() => import('./pages/Template'))
 
 // Global React Query error surfacing. Page-level mutations can still
 // attach their own onError toast — this only fires for errors that
@@ -65,75 +72,85 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+function PageLoader() {
+  return (
+    <div className="bg-background flex min-h-screen items-center justify-center">
+      <Loader2 className="text-muted-foreground h-6 w-6 animate-spin" />
+    </div>
+  )
+}
+
 function App() {
   return (
-    <ThemeProvider defaultTheme="system" storageKey="fb-bot-ui-theme">
+    <ThemeProvider defaultTheme="dark" storageKey="fb-bot-ui-theme">
       <QueryClientProvider client={queryClient}>
         <ErrorBoundary scope="aplikasi">
           <BrowserRouter>
-            <Routes>
-              <Route path="/login" element={<Login />} />
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <ErrorBoundary scope="halaman Trending">
-                      <Trending />
-                    </ErrorBoundary>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/review"
-                element={
-                  <ProtectedRoute>
-                    <ErrorBoundary scope="halaman Review">
-                      <ReviewQueue />
-                    </ErrorBoundary>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/history"
-                element={
-                  <ProtectedRoute>
-                    <ErrorBoundary scope="halaman History">
-                      <History />
-                    </ErrorBoundary>
-                  </ProtectedRoute>
-                }
-              />
-              <Route
-                path="/accounts"
-                element={
-                  <AdminRoute>
-                    <ErrorBoundary scope="halaman Accounts">
-                      <FBAccounts />
-                    </ErrorBoundary>
-                  </AdminRoute>
-                }
-              />
-              <Route
-                path="/sources"
-                element={
-                  <AdminRoute>
-                    <ErrorBoundary scope="halaman Sumber">
-                      <Sources />
-                    </ErrorBoundary>
-                  </AdminRoute>
-                }
-              />
-              <Route
-                path="/template"
-                element={
-                  <AdminRoute>
-                    <ErrorBoundary scope="halaman Template">
-                      <Template />
-                    </ErrorBoundary>
-                  </AdminRoute>
-                }
-              />
-            </Routes>
+            <Suspense fallback={<PageLoader />}>
+              <Routes>
+                <Route path="/login" element={<Login />} />
+                <Route
+                  path="/"
+                  element={
+                    <ProtectedRoute>
+                      <ErrorBoundary scope="halaman Trending">
+                        <Trending />
+                      </ErrorBoundary>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/review"
+                  element={
+                    <ProtectedRoute>
+                      <ErrorBoundary scope="halaman Review">
+                        <ReviewQueue />
+                      </ErrorBoundary>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/history"
+                  element={
+                    <ProtectedRoute>
+                      <ErrorBoundary scope="halaman History">
+                        <History />
+                      </ErrorBoundary>
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/accounts"
+                  element={
+                    <AdminRoute>
+                      <ErrorBoundary scope="halaman Accounts">
+                        <FBAccounts />
+                      </ErrorBoundary>
+                    </AdminRoute>
+                  }
+                />
+                <Route
+                  path="/sources"
+                  element={
+                    <AdminRoute>
+                      <ErrorBoundary scope="halaman Sumber">
+                        <Sources />
+                      </ErrorBoundary>
+                    </AdminRoute>
+                  }
+                />
+                <Route
+                  path="/template"
+                  element={
+                    <AdminRoute>
+                      <ErrorBoundary scope="halaman Template">
+                        <Template />
+                      </ErrorBoundary>
+                    </AdminRoute>
+                  }
+                />
+              </Routes>
+            </Suspense>
           </BrowserRouter>
         </ErrorBoundary>
         <Toaster richColors closeButton />
