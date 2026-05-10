@@ -65,15 +65,6 @@ export const api = {
 
   getMe: () => request('/auth/me'),
 
-  getPendingDrafts: (limit = 20, offset = 0) =>
-    request(`/drafts/pending?limit=${limit}&offset=${offset}`),
-
-  approveDraft: (draftId: number, action: string, reason?: string, editedText?: string) =>
-    request(`/approvals/${draftId}`, {
-      method: 'POST',
-      body: JSON.stringify({ action, reason, edited_text: editedText }),
-    }),
-
   getStats: () => request('/stats/summary'),
 
   // FB Accounts (single-account system)

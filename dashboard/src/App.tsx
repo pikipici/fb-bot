@@ -20,7 +20,6 @@ import { ErrorBoundary } from '@/components/error-boundary'
 import Login from './pages/Login'
 
 const Trending = lazy(() => import('./pages/Trending'))
-const ReviewQueue = lazy(() => import('./pages/ReviewQueue'))
 const History = lazy(() => import('./pages/History'))
 const FBAccounts = lazy(() => import('./pages/FBAccounts'))
 const Sources = lazy(() => import('./pages/Sources'))
@@ -95,16 +94,6 @@ function App() {
                     <ProtectedRoute>
                       <ErrorBoundary scope="halaman Trending">
                         <Trending />
-                      </ErrorBoundary>
-                    </ProtectedRoute>
-                  }
-                />
-                <Route
-                  path="/review"
-                  element={
-                    <ProtectedRoute>
-                      <ErrorBoundary scope="halaman Review">
-                        <ReviewQueue />
                       </ErrorBoundary>
                     </ProtectedRoute>
                   }

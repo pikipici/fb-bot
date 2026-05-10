@@ -23,9 +23,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from server.routers import (
-    approvals,
     auth,
-    drafts,
     fb_accounts,
     health,
     history,
@@ -94,8 +92,6 @@ app.add_middleware(
 app.include_router(auth.router, prefix="/api/v1", tags=["auth"])
 app.include_router(health.router, prefix="/api/v1", tags=["health"])
 app.include_router(posts.router, prefix="/api/v1", tags=["posts"])
-app.include_router(drafts.router, prefix="/api/v1", tags=["drafts"])
-app.include_router(approvals.router, prefix="/api/v1", tags=["approvals"])
 app.include_router(stats.router, prefix="/api/v1", tags=["stats"])
 app.include_router(settings.router, prefix="/api/v1", tags=["settings"])
 app.include_router(reports.router, prefix="/api/v1", tags=["reports"])

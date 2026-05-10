@@ -266,55 +266,6 @@ class TestMe:
         assert resp.status_code in (401, 403)
 
 
-class TestRBAC:
-    def test_viewer_cannot_approve(self, client, admin_token):
-        client.post(
-            "/api/v1/auth/register",
-            json={
-                "username": "viewer1",
-                "password": "pass123",
-                "role": "viewer",
-            },
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-        login = client.post(
-            "/api/v1/auth/login",
-            json={"username": "viewer1", "password": "pass123"},
-        )
-        viewer_token = login.json()["access_token"]
-
-        resp = client.post(
-            "/api/v1/approvals/1",
-            json={"action": "approve"},
-            headers={"Authorization": f"Bearer {viewer_token}"},
-        )
-        assert resp.status_code == 403
-
-    def test_operator_can_approve(self, client, admin_token):
-        client.post(
-            "/api/v1/auth/register",
-            json={
-                "username": "operator1",
-                "password": "pass123",
-                "role": "operator",
-            },
-            headers={"Authorization": f"Bearer {admin_token}"},
-        )
-        login = client.post(
-            "/api/v1/auth/login",
-            json={"username": "operator1", "password": "pass123"},
-        )
-        operator_token = login.json()["access_token"]
-
-        resp = client.post(
-            "/api/v1/approvals/1",
-            json={"action": "approve"},
-            headers={"Authorization": f"Bearer {operator_token}"},
-        )
-        # Draft does not exist, so 404 is acceptable. Never 403.
-        assert resp.status_code != 403
-
-
 class TestProductionFailFast:
     def test_missing_jwt_secret_in_production_raises(self, monkeypatch):
         """``_resolve_jwt_secret`` must fail-closed in production."""

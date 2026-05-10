@@ -107,7 +107,7 @@ pagination.
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                         Dashboard (React)                             │
-│    /trending    /history    /review    /sources    /template         │
+│    /trending    /history    /sources    /template                    │
 └────────┬─────────────────────────────────────────────────────┬───────┘
          │ REST /api/v1                                        │
          ↓                                                      │
