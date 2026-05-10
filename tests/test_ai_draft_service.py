@@ -43,7 +43,7 @@ def db_session(tmp_path):
     db = SessionLocal()
     try:
         source = Source(
-            name="test-source", source_type="feed", source_identifier="home"
+            type="home_feed", label="Test Home"
         )
         db.add(source)
         db.commit()
