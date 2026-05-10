@@ -122,7 +122,7 @@ CREATE INDEX idx_comment_history_post ON comment_history(trending_post_id);
 
 ---
 
-### Task A2: SQLAlchemy Models Update `[ ]`
+### Task A2: SQLAlchemy Models Update `[x]`
 
 **Objective:** Update `server/models.py` — extend `FBAccount`, add `Source`, `TrendingPost`, `CommentTemplate`, `CommentHistory`.
 
@@ -148,7 +148,7 @@ def test_trending_post_model_has_score():
 
 ---
 
-### Task A3: Cookie Parser & Validator Service `[ ]`
+### Task A3: Cookie Parser & Validator Service `[x]`
 
 **Objective:** Service yang terima raw cookie string (format `name=value; name=value; ...`), parse ke dict, extract cookie penting (`c_user`, `xs`, `datr`, `fr`, `sb`, `wd`, `presence`), validate dengan GET `https://m.facebook.com/me` → parse response buat nama + fb_user_id + profile pic URL.
 
@@ -175,7 +175,7 @@ def serialize_cookies(cookies: dict) -> str  # buat disimpan ke DB
 
 ---
 
-### Task A4: Encrypt/Decrypt Cookies via Existing Fernet `[ ]`
+### Task A4: Encrypt/Decrypt Cookies via Existing Fernet `[x]`
 
 **Objective:** Pake `server/crypto.py` yang udah ada buat encrypt serialized cookie string. Tambah helper `encrypt_cookies(raw: str) -> str` + `decrypt_cookies(enc: str) -> str`.
 
@@ -187,7 +187,7 @@ def serialize_cookies(cookies: dict) -> str  # buat disimpan ke DB
 
 ---
 
-### Task A5: Router `/api/v1/fb-accounts/connect-cookie` `[ ]`
+### Task A5: Router `/api/v1/fb-accounts/connect-cookie` `[x]`
 
 **Objective:** Endpoint POST body `{raw_cookies: str}` → parse + validate + preview → return `{ok: true, preview: {name, fb_user_id, profile_pic_url}}` tanpa save. Endpoint POST `/fb-accounts/confirm-cookie` body `{label: str}` → save (pake session cookies terakhir yang tersimpan di cache 5 menit, atau re-validate lagi).
 
