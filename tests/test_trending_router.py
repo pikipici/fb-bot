@@ -530,7 +530,13 @@ class TestGenerateDraft:
 
 
 class TestAIDraft:
-    """POST /api/v1/trending/{post_id}/ai-draft — LLM draft generation."""
+    """POST /api/v1/trending/{post_id}/ai-draft — LLM draft generation.
+
+    Note: we patch ``AIDraftService._call_llm`` rather than ``httpx.Client.post``
+    because ``TestClient`` itself routes requests through ``httpx.Client``, so
+    a top-level httpx patch would intercept the request to the endpoint
+    before it ever reaches the router.
+    """
 
     def _setup_post(self, client, admin_token, fb_post_id="ai1", **kwargs):
         spec = {
@@ -558,13 +564,10 @@ class TestAIDraft:
 
         pid = self._setup_post(client, admin_token)
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "Mantap bro keren!"}}]
-        }
-        mock_resp.raise_for_status = MagicMock()
-        with patch("httpx.Client.post", return_value=mock_resp):
+        with patch.object(
+            ai_mod.AIDraftService, "_call_llm",
+            return_value="Mantap bro keren!",
+        ):
             resp = client.post(
                 f"/api/v1/trending/{pid}/ai-draft",
                 headers=_auth(admin_token),
@@ -586,13 +589,9 @@ class TestAIDraft:
 
         pid = self._setup_post(client, admin_token, fb_post_id="ai2")
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "Wih keren!"}}]
-        }
-        mock_resp.raise_for_status = MagicMock()
-        with patch("httpx.Client.post", return_value=mock_resp):
+        with patch.object(
+            ai_mod.AIDraftService, "_call_llm", return_value="Wih keren!"
+        ):
             client.post(
                 f"/api/v1/trending/{pid}/ai-draft",
                 headers=_auth(admin_token),
@@ -611,13 +610,9 @@ class TestAIDraft:
 
         pid = self._setup_post(client, admin_token, fb_post_id="ai3")
 
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {
-            "choices": [{"message": {"content": "first"}}]
-        }
-        mock_resp.raise_for_status = MagicMock()
-        with patch("httpx.Client.post", return_value=mock_resp):
+        with patch.object(
+            ai_mod.AIDraftService, "_call_llm", return_value="first"
+        ):
             r1 = client.post(
                 f"/api/v1/trending/{pid}/ai-draft",
                 headers=_auth(admin_token),
