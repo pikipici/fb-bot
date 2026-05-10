@@ -156,8 +156,13 @@ class FBAccount(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     label: Mapped[str] = mapped_column(String(100), nullable=False)
-    email_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    password_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    # email/password_encrypted dipertahankan untuk back-compat dengan flow
+    # manual lama, tapi nullable karena akun yang connect via cookie gak
+    # butuh creds.
+    email_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    password_encrypted: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE", index=True)
     purpose: Mapped[str] = mapped_column(String(20), default="both")
     last_used_at: Mapped[datetime | None] = mapped_column(
@@ -171,4 +176,149 @@ class FBAccount(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now
+    )
+    # Cookie-session fields (Layer 1+2).
+    cookies_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fb_user_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True, index=True
+    )
+    fb_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    fb_profile_pic_url: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    cookies_expired_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+
+class Source(Base):
+    """A scan target: home feed, group, or page.
+
+    - ``type`` = ``home_feed`` | ``group`` | ``page``
+    - ``fb_entity_id`` = numeric group id / page id (null for home_feed)
+    - ``keywords_include`` / ``keywords_exclude`` = JSON-encoded list of
+      case-insensitive keyword strings (normalized in the service layer).
+    """
+
+    __tablename__ = "sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    type: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    fb_entity_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    keywords_include: Mapped[str | None] = mapped_column(Text, nullable=True)
+    keywords_exclude: Mapped[str | None] = mapped_column(Text, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    last_scanned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now
+    )
+
+
+class TrendingPost(Base):
+    """A post surfaced by the scanner that passed the trending threshold.
+
+    ``status`` lifecycle:
+      NEW -> (user clicks Generate Draft) -> DRAFTED
+      NEW -> (user clicks Skip) -> SKIPPED
+      DRAFTED -> (user Sends) -> COMMENTED
+    Re-scans refresh metrics/score but don't overwrite non-NEW status so
+    user's intent is preserved.
+    """
+
+    __tablename__ = "trending_posts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fb_post_id: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False, index=True
+    )
+    source_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    author_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    author_fb_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    text_snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    post_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    thumbnail_url: Mapped[str | None] = mapped_column(
+        String(500), nullable=True
+    )
+    likes: Mapped[int] = mapped_column(Integer, default=0)
+    comments: Mapped[int] = mapped_column(Integer, default=0)
+    shares: Mapped[int] = mapped_column(Integer, default=0)
+    reactions_total: Mapped[int] = mapped_column(Integer, default=0)
+    score: Mapped[float] = mapped_column(Float, default=0.0, index=True)
+    velocity: Mapped[float] = mapped_column(Float, default=0.0)
+    post_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    collected_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, index=True
+    )
+    status: Mapped[str] = mapped_column(String(20), default="NEW", index=True)
+
+
+class CommentTemplate(Base):
+    """Promotional comment template.
+
+    MVP: single active row (``is_active=True``). Schema already supports
+    multi-template to avoid another migration later.
+    """
+
+    __tablename__ = "comment_templates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(
+        String(100), default="default", nullable=False
+    )
+    template_text: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now
+    )
+
+
+class CommentHistory(Base):
+    """Log of comments the human sent via the dashboard (Layer 2).
+
+    ``status`` = ``SENT`` | ``FAILED`` | ``PENDING``.
+    Rate-limit quota queries filter by ``status='SENT'`` and a rolling
+    ``sent_at`` window.
+    """
+
+    __tablename__ = "comment_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    trending_post_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("trending_posts.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    comment_text: Mapped[str] = mapped_column(Text, nullable=False)
+    fb_comment_id: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utc_now, index=True
     )
