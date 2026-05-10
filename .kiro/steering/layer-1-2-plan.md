@@ -450,7 +450,7 @@ is_trending = (
 
 ## Phase F — Template + Draft + Send Flow
 
-### Task F1: Template Service + Router `[ ]`
+### Task F1: Template Service + Router `[x]`
 
 **Objective:** CRUD template (MVP single default). Endpoint `GET /template` return active, `PUT /template` body `{template_text}` update.
 
@@ -464,7 +464,7 @@ is_trending = (
 
 ---
 
-### Task F2: Template Page / Settings Tab `[ ]`
+### Task F2: Template Page / Settings Tab `[x]`
 
 **Objective:** Dashboard page `/settings` (atau section di existing settings), textarea gede, save button, counter karakter, preview bagaimana kelihatan.
 
