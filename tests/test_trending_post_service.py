@@ -199,6 +199,57 @@ class TestKeywordFilter:
         assert result.skipped == 1
 
 
+class TestUnsupportedUrlFilter:
+    """Scanner must drop Stories/Reels/Watch before inserting.
+
+    These FB URL shapes have no comment composer in the DOM, so letting
+    them into ``trending_posts`` just creates dead cards that can only be
+    Skipped. Filter applies equally to inserts and re-scans of existing
+    rows (idempotent upsert should not silently resurrect them).
+    """
+
+    @pytest.mark.parametrize(
+        "bad_url",
+        [
+            "https://www.facebook.com/stories/122112357512213503/abc",
+            "https://m.facebook.com/stories/1/foo",
+            "https://www.facebook.com/reel/1234567890",
+            "https://www.facebook.com/reels/1234567890/",
+            "https://www.facebook.com/watch/?v=1234567890",
+            "https://www.facebook.com/share/r/abcDEF/",
+            "https://www.facebook.com/share/v/abcDEF/",
+        ],
+    )
+    def test_insert_unsupported_url_is_skipped(
+        self, svc, source, db, bad_url
+    ):
+        post = _raw_post(fb_post_id="bad_shape")
+        post["post_url"] = bad_url
+        result = svc.upsert(source.id, post)
+        assert result.skipped == 1
+        assert db.query(TrendingPost).count() == 0
+
+    def test_supported_url_still_inserted(self, svc, source, db):
+        """Regression guard — normal permalinks must NOT be filtered."""
+        post = _raw_post(fb_post_id="ok_perma")
+        post["post_url"] = (
+            "https://www.facebook.com/permalink.php?story_fbid=1&id=2"
+        )
+        result = svc.upsert(source.id, post)
+        assert result.inserted == 1
+
+    def test_missing_post_url_is_not_blocked_by_filter(
+        self, svc, source, db
+    ):
+        """No ``post_url`` means we can't classify — don't filter on that."""
+        post = _raw_post(fb_post_id="no_url")
+        post["post_url"] = None
+        result = svc.upsert(source.id, post)
+        # Null URL can still happen (e.g. private sources). Upstream
+        # logic handles the missing URL — don't short-circuit here.
+        assert result.inserted == 1
+
+
 class TestListTrending:
     def test_list_orders_by_score_desc(self, svc, source, db):
         posts = [

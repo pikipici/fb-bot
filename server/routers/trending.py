@@ -44,6 +44,7 @@ from server.services.rate_limit_service import (
     RateLimitService,
 )
 from server.services.template_service import TemplateService, render_template
+from server.utils.fb_url import classify_unsupported_post_url
 
 logger = logging.getLogger(__name__)
 
@@ -57,35 +58,10 @@ _DEFAULT_LIMIT = 50
 _admin_only = require_role(Role.ADMIN)
 
 
-# URL shapes that CANNOT host a web comment composer — Stories/Reels/Watch
-# render in dedicated viewers without the regular composer DOM, and the
-# Playwright sender will just time out hunting for a textbox that never
-# exists. Reject these early so the user gets an instant 415 instead of
-# waiting ~60s for a sender failure.
-_UNSUPPORTED_PATH_FRAGMENTS: tuple[tuple[str, str], ...] = (
-    ("/stories/", "Stories"),
-    ("/reel/", "Reel"),
-    ("/reels/", "Reel"),
-    ("/watch/", "Watch"),
-    ("/share/r/", "Reel share"),
-    ("/share/v/", "Video share"),
-)
-
-
-def _classify_unsupported_post_url(post_url: str) -> str | None:
-    """Return a human label if ``post_url`` points to a non-commentable view.
-
-    Matching is path-based and case-insensitive so it tolerates both
-    ``www.facebook.com`` and ``m.facebook.com`` hosts as well as trailing
-    query strings. Returns ``None`` when the URL looks commentable.
-    """
-    if not post_url:
-        return None
-    lowered = post_url.lower()
-    for fragment, label in _UNSUPPORTED_PATH_FRAGMENTS:
-        if fragment in lowered:
-            return label
-    return None
+# Path fragments that cannot host a comment composer live in
+# ``server.utils.fb_url``. We alias the classifier here so existing call
+# sites keep the short name without changing signatures.
+_classify_unsupported_post_url = classify_unsupported_post_url
 
 
 def _serialize(post: TrendingPost, source: Source | None) -> dict:

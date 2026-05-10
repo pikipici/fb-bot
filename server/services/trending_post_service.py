@@ -24,6 +24,7 @@ from bot.modules.keyword_filter import matches_keyword_filter
 from bot.modules.trending_scorer import score_trending
 from server.models import Source, TrendingPost
 from server.services.source_service import _decode_keywords
+from server.utils.fb_url import classify_unsupported_post_url
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,19 @@ class TrendingPostService:
         exclude = _decode_keywords(source.keywords_exclude)
 
         if not matches_keyword_filter(text, include=include, exclude=exclude):
+            return UpsertResult(skipped=1)
+
+        # Drop Stories / Reels / Watch URLs — they have no comment
+        # composer DOM, so letting them into the table just creates dead
+        # cards that can only be Skipped. Missing post_url is still
+        # allowed (upstream logic handles nulls).
+        post_url = post.get("post_url")
+        if post_url and classify_unsupported_post_url(post_url) is not None:
+            logger.debug(
+                "upsert: dropping unsupported URL shape at source=%d (%s)",
+                source_id,
+                post_url,
+            )
             return UpsertResult(skipped=1)
 
         scored = score_trending(post)
