@@ -568,3 +568,305 @@ class TestSkipPost:
             "/api/v1/trending/99999/skip", headers=_auth(admin_token)
         )
         assert resp.status_code == 404
+
+
+# --- Send Comment (F5) ----------------------------------------------------
+
+
+def _seed_active_fb_account(client: TestClient, *, fb_name: str = "Digi Markt"):
+    """Seed a minimal active FBAccount row with encrypted cookies."""
+    from server.crypto import encrypt_cookies
+    from server.models import FBAccount
+
+    SessionLocal = client._session_factory  # type: ignore[attr-defined]
+    with SessionLocal() as db:
+        acc = FBAccount(
+            label="test acc",
+            status="ACTIVE",
+            cookies_encrypted=encrypt_cookies({"c_user": "1", "xs": "y"}),
+            fb_name=fb_name,
+        )
+        db.add(acc)
+        db.commit()
+        return acc.id
+
+
+class TestSendComment:
+    def _seed_drafted(self, client):
+        _seed_posts(
+            client,
+            [
+                {
+                    "source_type": "home_feed",
+                    "source_label": "Beranda",
+                    "fb_post_id": "send1",
+                    "score": 50,
+                    "reactions_total": 50,
+                    "status": "DRAFTED",
+                    "post_url": "https://www.facebook.com/p/1",
+                    "author": "Someone",
+                }
+            ],
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            from server.models import TrendingPost as TP
+
+            return db.query(TP).filter_by(fb_post_id="send1").first().id
+
+    def test_unauth_rejected(self, client):
+        resp = client.post(
+            "/api/v1/trending/1/comment", json={"comment_text": "hi"}
+        )
+        assert resp.status_code in (401, 403)
+
+    def test_viewer_rejected(self, client, viewer_token):
+        resp = client.post(
+            "/api/v1/trending/1/comment",
+            json={"comment_text": "hi"},
+            headers=_auth(viewer_token),
+        )
+        assert resp.status_code == 403
+
+    def test_unknown_post_returns_404(
+        self, client, admin_token, monkeypatch
+    ):
+        _seed_active_fb_account(client)
+        resp = client.post(
+            "/api/v1/trending/99999/comment",
+            json={"comment_text": "hi"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 404
+
+    def test_empty_comment_rejected(self, client, admin_token):
+        _seed_active_fb_account(client)
+        pid = self._seed_drafted(client)
+        resp = client.post(
+            f"/api/v1/trending/{pid}/comment",
+            json={"comment_text": "   "},
+            headers=_auth(admin_token),
+        )
+        # 400 from our validator, or 422 from pydantic min_length
+        assert resp.status_code in (400, 422)
+
+    def test_already_commented_returns_409(self, client, admin_token):
+        _seed_active_fb_account(client)
+        _seed_posts(
+            client,
+            [
+                {
+                    "source_type": "home_feed",
+                    "source_label": "Beranda",
+                    "fb_post_id": "send_done",
+                    "score": 50,
+                    "reactions_total": 50,
+                    "status": "COMMENTED",
+                }
+            ],
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            from server.models import TrendingPost as TP
+
+            pid = db.query(TP).filter_by(fb_post_id="send_done").first().id
+        resp = client.post(
+            f"/api/v1/trending/{pid}/comment",
+            json={"comment_text": "hi"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 409
+
+    def test_no_active_fb_account_returns_503(self, client, admin_token):
+        pid = self._seed_drafted(client)
+        # NOTE: no FBAccount seeded
+        resp = client.post(
+            f"/api/v1/trending/{pid}/comment",
+            json={"comment_text": "halo"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 503
+
+    def test_happy_path_success(self, client, admin_token, monkeypatch):
+        from bot.modules.comment_sender import SendResult
+
+        async def _fake_send(**kwargs):
+            return SendResult(
+                success=True,
+                comment_text=kwargs["comment_text"],
+                post_url=kwargs["post_url"],
+                fb_comment_id="cmt_happy",
+            )
+
+        monkeypatch.setattr(
+            "server.routers.trending.send_comment", _fake_send
+        )
+
+        _seed_active_fb_account(client)
+        pid = self._seed_drafted(client)
+
+        resp = client.post(
+            f"/api/v1/trending/{pid}/comment",
+            json={"comment_text": "halo bro"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["result"]["success"] is True
+        assert body["result"]["fb_comment_id"] == "cmt_happy"
+        assert body["post"]["status"] == "COMMENTED"
+        assert body["quota"]["used"] == 1
+        assert body["quota"]["remaining"] == 4
+
+        # Verify CommentHistory row inserted with SENT
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            from server.models import CommentHistory
+
+            rows = db.query(CommentHistory).all()
+            assert len(rows) == 1
+            assert rows[0].status == "SENT"
+            assert rows[0].comment_text == "halo bro"
+            assert rows[0].fb_comment_id == "cmt_happy"
+
+    def test_rate_limit_blocks_before_send(
+        self, client, admin_token, monkeypatch
+    ):
+        sent_flag = {"called": False}
+
+        async def _fake_send(**kwargs):
+            sent_flag["called"] = True
+            return None  # would crash if called
+
+        monkeypatch.setattr(
+            "server.routers.trending.send_comment", _fake_send
+        )
+
+        _seed_active_fb_account(client)
+        pid = self._seed_drafted(client)
+
+        # Pre-seed 5 SENT rows to exhaust quota
+        from datetime import datetime, timedelta, timezone
+
+        from server.models import CommentHistory
+
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            for i in range(5):
+                db.add(
+                    CommentHistory(
+                        trending_post_id=pid,
+                        comment_text="x",
+                        status="SENT",
+                        sent_at=datetime.now(timezone.utc)
+                        - timedelta(minutes=10 + i),
+                    )
+                )
+            db.commit()
+
+        resp = client.post(
+            f"/api/v1/trending/{pid}/comment",
+            json={"comment_text": "ke-6 ya"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 429
+        assert sent_flag["called"] is False
+
+    def test_sender_failure_logs_failed_no_status_flip(
+        self, client, admin_token, monkeypatch
+    ):
+        from bot.modules.comment_sender import SendResult
+
+        async def _fake_send(**kwargs):
+            return SendResult(
+                success=False,
+                comment_text=kwargs["comment_text"],
+                post_url=kwargs["post_url"],
+                fb_comment_id=None,
+                error="composer ga ketemu",
+            )
+
+        monkeypatch.setattr(
+            "server.routers.trending.send_comment", _fake_send
+        )
+
+        _seed_active_fb_account(client)
+        pid = self._seed_drafted(client)
+
+        resp = client.post(
+            f"/api/v1/trending/{pid}/comment",
+            json={"comment_text": "halo"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 502
+        body = resp.json()
+        assert "composer" in (body.get("detail") or "").lower()
+
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            from server.models import CommentHistory, TrendingPost as TP
+
+            rows = db.query(CommentHistory).all()
+            assert len(rows) == 1
+            assert rows[0].status == "FAILED"
+            # Post status should NOT flip
+            post = db.query(TP).filter_by(id=pid).first()
+            assert post.status == "DRAFTED"
+
+    def test_cookie_expired_marks_account_and_returns_503(
+        self, client, admin_token, monkeypatch
+    ):
+        from bot.modules.comment_sender import CookieExpiredError
+
+        async def _fake_send(**kwargs):
+            raise CookieExpiredError("redirect ke login")
+
+        monkeypatch.setattr(
+            "server.routers.trending.send_comment", _fake_send
+        )
+
+        acc_id = _seed_active_fb_account(client)
+        pid = self._seed_drafted(client)
+
+        resp = client.post(
+            f"/api/v1/trending/{pid}/comment",
+            json={"comment_text": "halo"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 503
+
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            from server.models import FBAccount
+
+            acc = db.query(FBAccount).filter_by(id=acc_id).first()
+            assert acc.status == "EXPIRED"
+
+    def test_checkpoint_marks_account_and_returns_503(
+        self, client, admin_token, monkeypatch
+    ):
+        from bot.modules.comment_sender import CheckpointRequiredError
+
+        async def _fake_send(**kwargs):
+            raise CheckpointRequiredError("checkpoint required")
+
+        monkeypatch.setattr(
+            "server.routers.trending.send_comment", _fake_send
+        )
+
+        acc_id = _seed_active_fb_account(client)
+        pid = self._seed_drafted(client)
+
+        resp = client.post(
+            f"/api/v1/trending/{pid}/comment",
+            json={"comment_text": "halo"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 503
+
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            from server.models import FBAccount
+
+            acc = db.query(FBAccount).filter_by(id=acc_id).first()
+            assert acc.status == "CHECKPOINT"
