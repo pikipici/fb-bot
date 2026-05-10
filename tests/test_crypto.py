@@ -9,7 +9,6 @@ production fail-fast behavior.
 from __future__ import annotations
 
 import base64
-import os
 
 import pytest
 from cryptography.fernet import Fernet
@@ -71,3 +70,42 @@ class TestProductionFailFast:
         # Should not raise; ephemeral key is generated transparently.
         plaintext = "temp"
         assert crypto.decrypt(crypto.encrypt(plaintext)) == plaintext
+
+
+class TestCookieHelpers:
+    """Cookie helpers wrap encrypt/decrypt + serialize/parse so callers
+    can persist a cookie ``dict`` without boilerplate.
+    """
+
+    def test_cookie_dict_roundtrip(self, monkeypatch):
+        monkeypatch.setenv("CREDENTIALS_KEY", Fernet.generate_key().decode())
+        cookies = {
+            "c_user": "100001234567890",
+            "xs": "38%3AAbC...deadbeef",
+            "datr": "long-random-token",
+            "fr": "another-value",
+        }
+        enc = crypto.encrypt_cookies(cookies)
+        assert isinstance(enc, str)
+        assert "c_user" not in enc  # must be encrypted, not visible
+        out = crypto.decrypt_cookies(enc)
+        assert out == cookies
+
+    def test_empty_dict_roundtrip(self, monkeypatch):
+        monkeypatch.setenv("CREDENTIALS_KEY", Fernet.generate_key().decode())
+        enc = crypto.encrypt_cookies({})
+        assert crypto.decrypt_cookies(enc) == {}
+
+    def test_preserves_values_with_equals_and_semicolons(self, monkeypatch):
+        monkeypatch.setenv("CREDENTIALS_KEY", Fernet.generate_key().decode())
+        # Real FB cookie values contain '=' (base64 padding) regularly.
+        cookies = {"xs": "abc=def=ghi", "c_user": "123"}
+        enc = crypto.encrypt_cookies(cookies)
+        assert crypto.decrypt_cookies(enc) == cookies
+
+    def test_non_deterministic_ciphertext(self, monkeypatch):
+        monkeypatch.setenv("CREDENTIALS_KEY", Fernet.generate_key().decode())
+        cookies = {"c_user": "1", "xs": "2"}
+        a = crypto.encrypt_cookies(cookies)
+        b = crypto.encrypt_cookies(cookies)
+        assert a != b

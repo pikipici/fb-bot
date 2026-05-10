@@ -107,6 +107,46 @@ def decrypt(ciphertext: str) -> str:
     return f.decrypt(ciphertext.encode()).decode()
 
 
+def encrypt_cookies(cookies: dict[str, str]) -> str:
+    """Serialize a cookie dict and encrypt it.
+
+    Thin wrapper over :func:`encrypt` that uses the same
+    ``"k=v; k=v"`` wire format the cookie parser produces, so re-parsing
+    after decrypt is a no-op. Keys with ``;`` or ``=`` in their name are
+    rejected (they can't roundtrip cleanly); values with ``=`` are fine.
+    """
+    parts: list[str] = []
+    for name, value in cookies.items():
+        if ";" in name or "=" in name:
+            raise ValueError(
+                f"Cookie name {name!r} contains reserved characters"
+            )
+        if ";" in value:
+            raise ValueError(
+                f"Cookie value for {name!r} contains reserved ';'"
+            )
+        parts.append(f"{name}={value}")
+    return encrypt("; ".join(parts))
+
+
+def decrypt_cookies(ciphertext: str) -> dict[str, str]:
+    """Reverse of :func:`encrypt_cookies`. Returns a ``dict``."""
+    raw = decrypt(ciphertext)
+    out: dict[str, str] = {}
+    if not raw:
+        return out
+    for piece in raw.split(";"):
+        piece = piece.strip()
+        if not piece or "=" not in piece:
+            continue
+        name, _, value = piece.partition("=")
+        name = name.strip()
+        if not name:
+            continue
+        out[name] = value.strip()
+    return out
+
+
 # Retained for callers that still compute a derived key explicitly; it now
 # just returns ``_resolve_key()`` so the behavior is consistent with the
 # rest of the module. Kept separate from ``_resolve_key`` so external
