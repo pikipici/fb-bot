@@ -650,6 +650,90 @@ class TestSendComment:
         # 400 from our validator, or 422 from pydantic min_length
         assert resp.status_code in (400, 422)
 
+    @pytest.mark.parametrize(
+        "bad_url,kind",
+        [
+            (
+                "https://www.facebook.com/stories/122112357512213503/UzpfSVNDOjE=",
+                "stories",
+            ),
+            (
+                "https://www.facebook.com/reel/1234567890",
+                "reel",
+            ),
+            (
+                "https://www.facebook.com/watch/?v=1234567890",
+                "watch",
+            ),
+            (
+                "https://www.facebook.com/share/r/abcDEF123/",
+                "share_reel",
+            ),
+        ],
+    )
+    def test_unsupported_post_url_rejected(
+        self, client, admin_token, bad_url, kind
+    ):
+        """Stories / reels / watch URLs should 415 before Playwright runs."""
+        _seed_active_fb_account(client)
+        _seed_posts(
+            client,
+            [
+                {
+                    "source_type": "home_feed",
+                    "source_label": "Beranda",
+                    "fb_post_id": f"bad_{kind}",
+                    "score": 50,
+                    "reactions_total": 50,
+                    "status": "DRAFTED",
+                    "post_url": bad_url,
+                    "author": "Stranger",
+                }
+            ],
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            from server.models import TrendingPost as TP
+
+            pid = (
+                db.query(TP).filter_by(fb_post_id=f"bad_{kind}").first().id
+            )
+
+        # Spy on send_comment — it must NOT be invoked for unsupported URLs.
+        called = {"hit": False}
+
+        async def _fake_send(**_kwargs):
+            called["hit"] = True
+            raise AssertionError(
+                "send_comment should not run for unsupported URL"
+            )
+
+        import server.routers.trending as trending_mod
+
+        monkeypatch_target = getattr(trending_mod, "send_comment", None)
+        trending_mod.send_comment = _fake_send  # type: ignore[assignment]
+        try:
+            resp = client.post(
+                f"/api/v1/trending/{pid}/comment",
+                json={"comment_text": "halo"},
+                headers=_auth(admin_token),
+            )
+        finally:
+            trending_mod.send_comment = monkeypatch_target  # type: ignore[assignment]
+
+        assert resp.status_code == 415, resp.text
+        body = resp.json()
+        # Error body should mention the unsupported type so UI can surface it.
+        detail = (body.get("detail") or "").lower()
+        assert (
+            "stories" in detail
+            or "reel" in detail
+            or "watch" in detail
+            or "tidak didukung" in detail
+            or "not supported" in detail
+        )
+        assert called["hit"] is False
+
     def test_already_commented_returns_409(self, client, admin_token):
         _seed_active_fb_account(client)
         _seed_posts(

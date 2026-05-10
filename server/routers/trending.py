@@ -57,6 +57,37 @@ _DEFAULT_LIMIT = 50
 _admin_only = require_role(Role.ADMIN)
 
 
+# URL shapes that CANNOT host a web comment composer — Stories/Reels/Watch
+# render in dedicated viewers without the regular composer DOM, and the
+# Playwright sender will just time out hunting for a textbox that never
+# exists. Reject these early so the user gets an instant 415 instead of
+# waiting ~60s for a sender failure.
+_UNSUPPORTED_PATH_FRAGMENTS: tuple[tuple[str, str], ...] = (
+    ("/stories/", "Stories"),
+    ("/reel/", "Reel"),
+    ("/reels/", "Reel"),
+    ("/watch/", "Watch"),
+    ("/share/r/", "Reel share"),
+    ("/share/v/", "Video share"),
+)
+
+
+def _classify_unsupported_post_url(post_url: str) -> str | None:
+    """Return a human label if ``post_url`` points to a non-commentable view.
+
+    Matching is path-based and case-insensitive so it tolerates both
+    ``www.facebook.com`` and ``m.facebook.com`` hosts as well as trailing
+    query strings. Returns ``None`` when the URL looks commentable.
+    """
+    if not post_url:
+        return None
+    lowered = post_url.lower()
+    for fragment, label in _UNSUPPORTED_PATH_FRAGMENTS:
+        if fragment in lowered:
+            return label
+    return None
+
+
 def _serialize(post: TrendingPost, source: Source | None) -> dict:
     return {
         "id": post.id,
@@ -65,6 +96,7 @@ def _serialize(post: TrendingPost, source: Source | None) -> dict:
         "author_fb_id": post.author_fb_id,
         "text_snippet": post.text_snippet,
         "post_url": post.post_url,
+        "unsupported_kind": _classify_unsupported_post_url(post.post_url or ""),
         "thumbnail_url": post.thumbnail_url,
         "likes": post.likes,
         "comments": post.comments,
@@ -296,6 +328,17 @@ async def send_post_comment(
         raise HTTPException(
             status_code=400,
             detail="Post gak punya post_url — gak bisa buka post di FB.",
+        )
+
+    unsupported_kind = _classify_unsupported_post_url(post.post_url)
+    if unsupported_kind is not None:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Tipe post '{unsupported_kind}' tidak didukung untuk komen "
+                f"via bot — FB tidak merender composer di halaman "
+                f"{unsupported_kind.lower()}. Skip post ini."
+            ),
         )
 
     rate_svc = RateLimitService(db)

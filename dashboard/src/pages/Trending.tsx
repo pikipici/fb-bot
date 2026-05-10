@@ -52,6 +52,7 @@ interface TrendingPost {
   author_name: string | null
   text_snippet: string | null
   post_url: string | null
+  unsupported_kind: string | null
   thumbnail_url: string | null
   likes: number
   comments: number
@@ -175,9 +176,15 @@ function PostCard({
   const text = post.text_snippet?.trim() || ''
   const truncated = text.length > 280 ? text.slice(0, 280) + '…' : text
   const draftOpen = activeDraft !== null
-  const canDraft = isAdmin && post.status !== 'COMMENTED'
+  const unsupported = post.unsupported_kind !== null
+  const canDraft = isAdmin && post.status !== 'COMMENTED' && !unsupported
   const canSkip = isAdmin && post.status !== 'COMMENTED'
   const draftTrimmed = (activeDraft || '').trim()
+
+  const effectiveSendDisabled = sendDisabled || unsupported
+  const effectiveSendDisabledReason = unsupported
+    ? `Tipe ${post.unsupported_kind} gak bisa dikomen via bot`
+    : sendDisabledReason
 
   return (
     <Card className="flex flex-col overflow-hidden">
@@ -211,6 +218,15 @@ function PostCard({
             </div>
           </div>
           {statusBadge(post.status)}
+          {unsupported && (
+            <Badge
+              variant="outline"
+              className="border-amber-500/50 bg-amber-500/10 text-amber-500"
+              title={`Tipe ${post.unsupported_kind} gak bisa dikomen via bot — Skip aja`}
+            >
+              {post.unsupported_kind}
+            </Badge>
+          )}
         </div>
       </CardHeader>
 
@@ -267,17 +283,21 @@ function PostCard({
             />
             <div className="flex items-center justify-between">
               <span className="text-muted-foreground text-[10px]">
-                {sendDisabled
-                  ? sendDisabledReason
+                {effectiveSendDisabled
+                  ? effectiveSendDisabledReason
                   : `${draftTrimmed.length} karakter`}
               </span>
               <Button
                 size="sm"
                 disabled={
-                  isSending || sendDisabled || draftTrimmed.length === 0
+                  isSending || effectiveSendDisabled || draftTrimmed.length === 0
                 }
                 onClick={() => onSend(post.id, draftTrimmed)}
-                title={sendDisabled ? sendDisabledReason : 'Kirim komen ke FB'}
+                title={
+                  effectiveSendDisabled
+                    ? effectiveSendDisabledReason
+                    : 'Kirim komen ke FB'
+                }
               >
                 {isSending ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
@@ -301,9 +321,11 @@ function PostCard({
             title={
               post.status === 'COMMENTED'
                 ? 'Post udah di-commented'
-                : !isAdmin
-                  ? 'Butuh role admin'
-                  : 'Generate draft komen'
+                : unsupported
+                  ? `Tipe ${post.unsupported_kind} gak bisa dikomen via bot`
+                  : !isAdmin
+                    ? 'Butuh role admin'
+                    : 'Generate draft komen'
             }
           >
             {isDrafting ? (
