@@ -8,6 +8,7 @@ import FBAccounts from './pages/FBAccounts'
 import Sources from './pages/Sources'
 import Trending from './pages/Trending'
 import Template from './pages/Template'
+import History from './pages/History'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 
@@ -47,6 +48,14 @@ function App() {
               element={
                 <ProtectedRoute>
                   <ReviewQueue />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/history"
+              element={
+                <ProtectedRoute>
+                  <History />
                 </ProtectedRoute>
               }
             />

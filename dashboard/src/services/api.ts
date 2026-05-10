@@ -190,4 +190,18 @@ export const api = {
     }),
 
   getRateLimitStatus: () => request('/rate-limit/status'),
+
+  // Comment history (Layer 2 audit trail)
+  listHistory: (params: {
+    status?: 'SENT' | 'FAILED' | 'PENDING'
+    limit?: number
+    offset?: number
+  } = {}) => {
+    const q = new URLSearchParams()
+    if (params.status) q.set('status', params.status)
+    if (params.limit != null) q.set('limit', String(params.limit))
+    if (params.offset != null) q.set('offset', String(params.offset))
+    const qs = q.toString()
+    return request(`/history${qs ? `?${qs}` : ''}`)
+  },
 }
