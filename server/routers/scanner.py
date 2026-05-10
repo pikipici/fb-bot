@@ -112,9 +112,14 @@ def trigger_scan_now(
     if latest is not None and latest.status == "running":
         # Only treat as conflict if the running row is recent (<15 min).
         # Otherwise it's probably a stuck row from a crashed worker.
-        if latest.started_at is not None:
+        started_at = latest.started_at
+        if started_at is not None:
+            # SQLite reads back naive datetimes even when we wrote
+            # with tzinfo. Normalize before comparing.
+            if started_at.tzinfo is None:
+                started_at = started_at.replace(tzinfo=timezone.utc)
             age_s = (
-                datetime.now(timezone.utc) - latest.started_at
+                datetime.now(timezone.utc) - started_at
             ).total_seconds()
             if age_s < 15 * 60:
                 raise HTTPException(

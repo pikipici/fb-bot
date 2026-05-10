@@ -107,7 +107,9 @@ def _seed_run(client, **kwargs):
 class TestScannerStatus:
     def test_requires_auth(self, client):
         resp = client.get("/api/v1/scanner/status")
-        assert resp.status_code == 401
+        # HTTPBearer returns 403 when no Authorization header present;
+        # 401 comes from downstream token verification (bad/expired).
+        assert resp.status_code in (401, 403)
 
     def test_empty_history_returns_null_runs(self, client):
         token = _register_and_login(client, "u", "Abcdef123!")
@@ -164,7 +166,7 @@ class TestScannerStatus:
 class TestScannerRunNow:
     def test_requires_auth(self, client):
         resp = client.post("/api/v1/scanner/run-now")
-        assert resp.status_code == 401
+        assert resp.status_code in (401, 403)
 
     def test_non_admin_rejected(self, client):
         admin_token = _register_and_login(client, "admin", "Abcdef123!")
