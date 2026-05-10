@@ -194,6 +194,32 @@ class TestScanSource:
             with pytest.raises(CookieExpiredError):
                 await scan_source(src, {"c_user": "1"})
 
+    async def test_login_wall_dom_raises_even_when_url_safe(
+        self, mock_playwright_stack
+    ):
+        """FB serves login wall without URL redirect when cookies stale.
+
+        URL stays on ``facebook.com/home.php`` but body renders account
+        chooser. DOM probe must catch this and raise CookieExpiredError.
+        """
+        mocks = mock_playwright_stack
+        mocks["page"].url = "https://www.facebook.com/home.php"
+        # Route evaluate: login-wall probe returns marker; other evals
+        # (hydrate / extract) return empty list so the loop no-ops.
+        def _eval(script, *args, **kwargs):
+            if "loginMarker" in (script or ""):
+                return {"loginMarker": True, "reason": "text:Masuk Facebook"}
+            return []
+        mocks["page"].evaluate.side_effect = _eval
+
+        src = {"id": 1, "type": "home_feed"}
+        with patch(
+            "bot.modules.source_collector.async_playwright",
+            mocks["async_playwright"],
+        ):
+            with pytest.raises(CookieExpiredError):
+                await scan_source(src, {"c_user": "1"})
+
     async def test_closes_browser_on_success(self, mock_playwright_stack):
         mocks = mock_playwright_stack
         src = {"id": 1, "type": "home_feed"}

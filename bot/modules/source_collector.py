@@ -46,6 +46,7 @@ from typing import Any, Final
 
 from playwright.async_api import async_playwright
 
+from bot.modules.fb_auth_probe import is_login_wall, login_wall_reason
 from bot.modules.fb_session import DEFAULT_USER_AGENT, create_session_context
 
 logger = logging.getLogger(__name__)
@@ -317,6 +318,17 @@ async def scan_source(
             except Exception:  # pragma: no cover — transient timeout ok
                 logger.debug("networkidle timeout for %s — continuing", url)
             await page.wait_for_timeout(_INITIAL_SETTLE_MS)
+
+            # DOM-based login-wall check. Covers the common case where
+            # FB keeps the original URL but renders an account chooser
+            # or login form when cookies are stale — the URL-fragment
+            # check above only catches explicit redirects.
+            if await is_login_wall(page):
+                reason = await login_wall_reason(page) or "unknown"
+                raise CookieExpiredError(
+                    f"Login wall terdeteksi di {url} "
+                    f"(reason={reason}) — cookie expired."
+                )
 
             for i in range(SOURCE_SCROLL_COUNT):
                 # Hydrate every posinset currently in DOM.
