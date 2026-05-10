@@ -1,4 +1,4 @@
-"""Router — read-only trending posts feed + draft/skip status transitions.
+"""Router — read-only trending posts feed + draft/skip/send status transitions.
 
 ``GET /api/v1/trending`` — list trending posts (any auth role).
 ``POST /api/v1/trending/{post_id}/draft`` — admin-only, render the active
@@ -6,6 +6,13 @@ template against the post and flip status to ``DRAFTED``. Returns the
 rendered draft text for the UI to show in an editable textarea.
 ``POST /api/v1/trending/{post_id}/skip`` — admin-only, set status to
 ``SKIPPED``. Skip is a purely local action; FB is not touched.
+``POST /api/v1/trending/{post_id}/comment`` — admin-only, call the
+Playwright :func:`send_comment` with the active FB account's cookies.
+Rate-limited to 5 comments / 6 hours via :class:`RateLimitService`.
+On success records ``CommentHistory(status='SENT')`` which auto-flips
+the post to ``COMMENTED``; on sender error records ``FAILED`` without
+mutating post status. Cookie expired / checkpoint errors also mark the
+FB account accordingly.
 
 Status transition rules for ``/draft``:
 - ``NEW`` / ``DRAFTED`` / ``SKIPPED`` may be drafted (or re-drafted).
@@ -15,15 +22,30 @@ Status transition rules for ``/draft``:
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, func
 from sqlalchemy.orm import Session
 
+from bot.modules.comment_sender import (
+    CheckpointRequiredError,
+    CommentSendError,
+    CookieExpiredError,
+    send_comment,
+)
 from server.auth import Role, get_current_user, require_role
+from server.crypto import decrypt_cookies
 from server.database import get_db
-from server.models import Source, TrendingPost
+from server.models import FBAccount, TrendingPost, Source
+from server.services.rate_limit_service import (
+    RateLimitExceededError,
+    RateLimitService,
+)
 from server.services.template_service import TemplateService, render_template
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/trending", tags=["trending"])
 
@@ -206,3 +228,226 @@ def skip_post(
         else None
     )
     return {"post": _serialize(post, source)}
+
+
+# --- Send Comment (F5) ------------------------------------------------------
+
+
+class SendCommentRequest(BaseModel):
+    comment_text: str = Field(..., min_length=1, max_length=5_000)
+
+
+def _quota_dict(svc: RateLimitService) -> dict:
+    stats = svc.window_stats()
+    resets = stats.get("resets_at")
+    return {
+        "allowed": stats["allowed"],
+        "used": stats["used"],
+        "remaining": stats["remaining"],
+        "limit": stats["limit"],
+        "window_hours": stats["window_hours"],
+        "resets_at": resets.isoformat() if resets else None,
+    }
+
+
+def _pick_active_fb_account(db: Session) -> FBAccount | None:
+    return (
+        db.query(FBAccount)
+        .filter(FBAccount.status == "ACTIVE")
+        .filter(FBAccount.cookies_encrypted.isnot(None))
+        .order_by(FBAccount.id.asc())
+        .first()
+    )
+
+
+@router.post("/{post_id}/comment")
+async def send_post_comment(
+    post_id: int,
+    payload: SendCommentRequest,
+    user=Depends(_admin_only),
+    db: Session = Depends(get_db),
+):
+    """Post ``payload.comment_text`` as a real FB comment under this post.
+
+    Wiring order:
+      1. Validate inputs + load post + 409 if already COMMENTED.
+      2. Rate-limit preflight via :class:`RateLimitService.check_allowed`.
+      3. Load active FB account cookies; 503 kalau gak ada.
+      4. Invoke Playwright ``send_comment``.
+      5. On success → ``record_send(status='SENT')`` (auto-flips post
+         status). On sender error → ``record_send(status='FAILED')``
+         (no quota burn, no status flip) and return 502.
+      6. CookieExpired / Checkpoint → mark FB account + 503.
+    """
+    stripped = (payload.comment_text or "").strip()
+    if not stripped:
+        raise HTTPException(
+            status_code=400,
+            detail="comment_text kosong — minimal 1 karakter bukan whitespace.",
+        )
+
+    post = _load_post_or_404(db, post_id)
+    if post.status == "COMMENTED":
+        raise HTTPException(
+            status_code=409,
+            detail="Post udah COMMENTED, gak bisa dikomen lagi.",
+        )
+    if not post.post_url:
+        raise HTTPException(
+            status_code=400,
+            detail="Post gak punya post_url — gak bisa buka post di FB.",
+        )
+
+    rate_svc = RateLimitService(db)
+    pre = rate_svc.check_allowed()
+    if not pre.allowed:
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Quota habis bro — {pre.used}/{pre.limit} komen dalam "
+                f"{pre.window_hours} jam. Tunggu sampe "
+                f"{pre.resets_at.isoformat() if pre.resets_at else 'nanti'}."
+            ),
+        )
+
+    account = _pick_active_fb_account(db)
+    if account is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Belum ada FB account ACTIVE dengan cookies — "
+                "login cookie dulu di halaman Accounts."
+            ),
+        )
+
+    try:
+        cookies = decrypt_cookies(account.cookies_encrypted or "")
+    except Exception as exc:
+        logger.exception("decrypt cookies failed for account=%s", account.id)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Decrypt cookies gagal: {exc}",
+        ) from exc
+
+    display_name = account.fb_name or account.label or "me"
+
+    # Actually post to Facebook via Playwright.
+    try:
+        result = await send_comment(
+            post_url=post.post_url,
+            comment_text=stripped,
+            cookies=cookies,
+            display_name=display_name,
+        )
+    except CookieExpiredError as exc:
+        logger.warning(
+            "cookie expired for account=%s while commenting post=%s: %s",
+            account.id,
+            post.id,
+            exc,
+        )
+        account.status = "EXPIRED"
+        db.commit()
+        rate_svc.record_send(
+            trending_post_id=post.id,
+            comment_text=stripped,
+            user_id=getattr(user, "id", None),
+            status="FAILED",
+            error_message=f"cookie_expired: {exc}",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Cookie FB expired — login ulang di halaman Accounts."
+            ),
+        ) from exc
+    except CheckpointRequiredError as exc:
+        logger.warning(
+            "checkpoint required for account=%s post=%s: %s",
+            account.id,
+            post.id,
+            exc,
+        )
+        account.status = "CHECKPOINT"
+        db.commit()
+        rate_svc.record_send(
+            trending_post_id=post.id,
+            comment_text=stripped,
+            user_id=getattr(user, "id", None),
+            status="FAILED",
+            error_message=f"checkpoint: {exc}",
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "FB minta checkpoint/verifikasi — buka akun manual dulu."
+            ),
+        ) from exc
+    except CommentSendError as exc:
+        logger.exception(
+            "comment sender error for post=%s: %s", post.id, exc
+        )
+        rate_svc.record_send(
+            trending_post_id=post.id,
+            comment_text=stripped,
+            user_id=getattr(user, "id", None),
+            status="FAILED",
+            error_message=str(exc),
+        )
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if not result.success:
+        rate_svc.record_send(
+            trending_post_id=post.id,
+            comment_text=stripped,
+            user_id=getattr(user, "id", None),
+            status="FAILED",
+            error_message=result.error or "unknown sender error",
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=result.error or "Kirim komen gagal tanpa pesan.",
+        )
+
+    # Success — record SENT (auto-flip post to COMMENTED).
+    try:
+        rate_svc.record_send(
+            trending_post_id=post.id,
+            comment_text=stripped,
+            user_id=getattr(user, "id", None),
+            fb_comment_id=result.fb_comment_id,
+            status="SENT",
+        )
+    except RateLimitExceededError as exc:
+        # Very rare race if two admins click Send at once. Log + 429
+        # (but komen udah kelanjur ter-post, so just warn loud).
+        logger.warning(
+            "rate limit race after send succeeded post=%s: %s",
+            post.id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                "Komen udah kelanjur ke-post tapi rate limit full — "
+                "next send diblok."
+            ),
+        ) from exc
+
+    db.refresh(post)
+    source = (
+        db.query(Source).filter(Source.id == post.source_id).first()
+        if post.source_id is not None
+        else None
+    )
+    return {
+        "result": {
+            "success": True,
+            "comment_text": result.comment_text,
+            "post_url": result.post_url,
+            "fb_comment_id": result.fb_comment_id,
+            "error": None,
+        },
+        "post": _serialize(post, source),
+        "quota": _quota_dict(rate_svc),
+    }
