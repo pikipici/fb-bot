@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -524,6 +525,158 @@ class TestGenerateDraft:
             pid = db.query(TrendingPost).filter_by(fb_post_id="p7").first().id
         resp = client.post(
             f"/api/v1/trending/{pid}/draft", headers=_auth(viewer_token)
+        )
+        assert resp.status_code == 403
+
+
+class TestAIDraft:
+    """POST /api/v1/trending/{post_id}/ai-draft — LLM draft generation."""
+
+    def _setup_post(self, client, admin_token, fb_post_id="ai1", **kwargs):
+        spec = {
+            "source_type": "home_feed",
+            "source_label": "Beranda",
+            "fb_post_id": fb_post_id,
+            "score": 100,
+            "reactions_total": 100,
+            "author": "Budi",
+            "text": "jual laptop gaming",
+        }
+        spec.update(kwargs)
+        _seed_posts(client, [spec])
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            return db.query(TrendingPost).filter_by(fb_post_id=fb_post_id).first().id
+
+    def test_happy_path_returns_generated_draft(
+        self, client, admin_token, monkeypatch
+    ):
+        import server.services.ai_draft_service as ai_mod
+
+        monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+        ai_mod._reset_rate_limit_for_tests()
+
+        pid = self._setup_post(client, admin_token)
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "Mantap bro keren!"}}]
+        }
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.Client.post", return_value=mock_resp):
+            resp = client.post(
+                f"/api/v1/trending/{pid}/ai-draft",
+                headers=_auth(admin_token),
+            )
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["draft_text"] == "Mantap bro keren!"
+        assert body["post_id"] == pid
+
+    def test_ai_draft_does_not_change_post_status(
+        self, client, admin_token, monkeypatch
+    ):
+        """AI draft is pure text generation, status stays NEW."""
+        import server.services.ai_draft_service as ai_mod
+
+        monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+        ai_mod._reset_rate_limit_for_tests()
+
+        pid = self._setup_post(client, admin_token, fb_post_id="ai2")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "Wih keren!"}}]
+        }
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.Client.post", return_value=mock_resp):
+            client.post(
+                f"/api/v1/trending/{pid}/ai-draft",
+                headers=_auth(admin_token),
+            )
+
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            post = db.query(TrendingPost).filter_by(id=pid).first()
+            assert post.status == "NEW"
+
+    def test_rate_limit_returns_429(self, client, admin_token, monkeypatch):
+        import server.services.ai_draft_service as ai_mod
+
+        monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+        ai_mod._reset_rate_limit_for_tests()
+
+        pid = self._setup_post(client, admin_token, fb_post_id="ai3")
+
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "choices": [{"message": {"content": "first"}}]
+        }
+        mock_resp.raise_for_status = MagicMock()
+        with patch("httpx.Client.post", return_value=mock_resp):
+            r1 = client.post(
+                f"/api/v1/trending/{pid}/ai-draft",
+                headers=_auth(admin_token),
+            )
+            r2 = client.post(
+                f"/api/v1/trending/{pid}/ai-draft",
+                headers=_auth(admin_token),
+            )
+        assert r1.status_code == 200
+        assert r2.status_code == 429
+
+    def test_commented_post_returns_409(
+        self, client, admin_token, monkeypatch
+    ):
+        monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+        pid = self._setup_post(
+            client, admin_token, fb_post_id="ai4", status="COMMENTED"
+        )
+        resp = client.post(
+            f"/api/v1/trending/{pid}/ai-draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 409
+
+    def test_missing_api_key_returns_503(
+        self, client, admin_token, monkeypatch
+    ):
+        monkeypatch.delenv("SUMOPOD_API_KEY", raising=False)
+        pid = self._setup_post(client, admin_token, fb_post_id="ai5")
+        resp = client.post(
+            f"/api/v1/trending/{pid}/ai-draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 503
+
+    def test_stories_url_returns_415(
+        self, client, admin_token, monkeypatch
+    ):
+        monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+        pid = self._setup_post(
+            client,
+            admin_token,
+            fb_post_id="ai6",
+            post_url="https://facebook.com/stories/12345/",
+        )
+        resp = client.post(
+            f"/api/v1/trending/{pid}/ai-draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 415
+
+    def test_viewer_cannot_ai_draft(
+        self, client, admin_token, monkeypatch
+    ):
+        monkeypatch.setenv("SUMOPOD_API_KEY", "test-key")
+        pid = self._setup_post(client, admin_token, fb_post_id="ai7")
+        viewer_token = _register_and_login(
+            client, "viewer_ai", "pass123", "viewer", admin_token
+        )
+        resp = client.post(
+            f"/api/v1/trending/{pid}/ai-draft",
+            headers=_auth(viewer_token),
         )
         assert resp.status_code == 403
 

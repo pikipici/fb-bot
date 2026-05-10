@@ -44,6 +44,14 @@ from server.services.rate_limit_service import (
     RateLimitService,
 )
 from server.services.template_service import TemplateService, render_template
+from server.services.ai_draft_service import (
+    AIDraftConfigError,
+    AIDraftEmptyResponseError,
+    AIDraftNotFoundError,
+    AIDraftRateLimitError,
+    AIDraftService,
+    AIDraftUpstreamError,
+)
 from server.utils.fb_url import classify_unsupported_post_url
 
 logger = logging.getLogger(__name__)
@@ -211,6 +219,64 @@ def generate_draft(
         else None
     )
     return {"draft_text": draft_text, "post": _serialize(post, source)}
+
+
+@router.post("/{post_id}/ai-draft")
+def generate_ai_draft(
+    post_id: int,
+    user=Depends(_admin_only),
+    db: Session = Depends(get_db),
+):
+    """Generate a contextual draft via LLM (sumopod.com).
+
+    Uses the post's context (author, text, engagement) + all active
+    comment templates as style references. Does NOT change post status
+    — the user still has to review + click Generate Draft or Send to
+    flip it to DRAFTED/COMMENTED. This endpoint is pure text generation.
+
+    Rate-limited: 15s cooldown per user, 429 on cooldown hit.
+    """
+    post = _load_post_or_404(db, post_id)
+    if post.status == "COMMENTED":
+        raise HTTPException(
+            status_code=409,
+            detail="Post udah COMMENTED, gak perlu generate draft lagi.",
+        )
+
+    # Refuse preflight for unsupported URL kinds (Stories/Reel/Watch).
+    kind = _classify_unsupported_post_url(post.post_url or "")
+    if kind:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Tipe post '{kind}' tidak didukung untuk komentar.",
+        )
+
+    user_id = int(user.get("sub", 0))
+
+    try:
+        svc = AIDraftService(db)
+    except AIDraftConfigError as exc:
+        logger.error("AI draft service not configured: %s", exc)
+        raise HTTPException(
+            status_code=503,
+            detail="AI draft belum dikonfigurasi di server (SUMOPOD_API_KEY).",
+        )
+
+    try:
+        text = svc.generate(post_id=post.id, user_id=user_id)
+    except AIDraftNotFoundError:
+        raise HTTPException(status_code=404, detail="Post gak ketemu")
+    except AIDraftRateLimitError as exc:
+        raise HTTPException(status_code=429, detail=str(exc))
+    except AIDraftEmptyResponseError:
+        raise HTTPException(
+            status_code=502,
+            detail="LLM balikin respons kosong, coba lagi.",
+        )
+    except AIDraftUpstreamError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return {"draft_text": text, "post_id": post.id}
 
 
 @router.post("/{post_id}/skip")
