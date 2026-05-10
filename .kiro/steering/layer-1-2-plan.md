@@ -400,7 +400,7 @@ is_trending = (
 
 ## Phase E — Trending Page Frontend
 
-### Task E1: API `/api/v1/trending` `[ ]`
+### Task E1: API `/api/v1/trending` `[x]`
 
 **Objective:** `GET /trending?limit=50&status=NEW` → list trending posts sort by score desc.
 
@@ -427,7 +427,7 @@ is_trending = (
 
 ---
 
-### Task E2: Trending Page `/trending` `[ ]`
+### Task E2: Trending Page `/trending` `[x]`
 
 **Objective:** Dashboard page pake TanStack Query, auto-refetch tiap 30 detik. Card per post (responsive grid). Sort dropdown (score/velocity/recent). Filter by source dropdown. Filter by status (NEW/DRAFTED/SKIPPED/COMMENTED).
 
