@@ -12,6 +12,7 @@ import {
   Sparkles,
   ThumbsUp,
   TrendingUp,
+  Wand2,
   X,
 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -153,7 +154,9 @@ function PostCard({
   onDraftChange,
   onSkip,
   onSend,
+  onAIDraft,
   isDrafting,
+  isAIDrafting,
   isSkipping,
   isSending,
   sendDisabled,
@@ -167,7 +170,9 @@ function PostCard({
   onDraftChange: (text: string) => void
   onSkip: (postId: number) => void
   onSend: (postId: number, text: string) => void
+  onAIDraft: (postId: number) => void
   isDrafting: boolean
+  isAIDrafting: boolean
   isSkipping: boolean
   isSending: boolean
   sendDisabled: boolean
@@ -315,8 +320,31 @@ function PostCard({
         <div className="flex items-center gap-2">
           <Button
             variant="ghost"
+            size="icon"
+            className="h-8 w-8"
+            disabled={!canDraft || isAIDrafting || isDrafting}
+            onClick={() => onAIDraft(post.id)}
+            title={
+              post.status === 'COMMENTED'
+                ? 'Post udah di-commented'
+                : unsupported
+                  ? `Tipe ${post.unsupported_kind} gak bisa dikomen via bot`
+                  : !isAdmin
+                    ? 'Butuh role admin'
+                    : 'Generate draft pake AI (konteks post + template)'
+            }
+          >
+            {isAIDrafting ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Wand2 className="h-3.5 w-3.5" />
+            )}
+            <span className="sr-only">AI Draft</span>
+          </Button>
+          <Button
+            variant="ghost"
             size="sm"
-            disabled={!canDraft || isDrafting || draftOpen}
+            disabled={!canDraft || isDrafting || isAIDrafting || draftOpen}
             onClick={() => onStartDraft(post.id)}
             title={
               post.status === 'COMMENTED'
@@ -413,6 +441,33 @@ export default function Trending() {
     },
     onError: (err) => {
       toast.error(err.message || 'Gagal generate draft')
+    },
+  })
+
+  const aiDraftMutation = useMutation<
+    { draft_text: string; post_id: number },
+    Error,
+    number
+  >({
+    mutationFn: (postId) => api.generateAIDraft(postId),
+    onSuccess: (data) => {
+      // Dirty-check: if the user has modified the draft text for this
+      // post, confirm before overwriting their edits.
+      if (
+        draftingPostId === data.post_id &&
+        draftText.trim().length > 0 &&
+        !window.confirm(
+          'Draft lu udah diedit. Overwrite dengan hasil AI?',
+        )
+      ) {
+        return
+      }
+      setDraftingPostId(data.post_id)
+      setDraftText(data.draft_text)
+      toast.success('Draft AI siap — review dulu sebelum Send')
+    },
+    onError: (err) => {
+      toast.error(err.message || 'Gagal generate AI draft')
     },
   })
 
@@ -661,9 +716,14 @@ export default function Trending() {
                 onSend={(pid, text) =>
                   sendMutation.mutate({ postId: pid, text })
                 }
+                onAIDraft={(pid) => aiDraftMutation.mutate(pid)}
                 isDrafting={
                   draftMutation.isPending &&
                   draftMutation.variables === post.id
+                }
+                isAIDrafting={
+                  aiDraftMutation.isPending &&
+                  aiDraftMutation.variables === post.id
                 }
                 isSkipping={
                   skipMutation.isPending &&

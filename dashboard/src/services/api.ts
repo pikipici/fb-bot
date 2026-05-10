@@ -171,6 +171,9 @@ export const api = {
   generateDraft: (postId: number) =>
     request(`/trending/${postId}/draft`, { method: 'POST' }),
 
+  generateAIDraft: (postId: number) =>
+    request(`/trending/${postId}/ai-draft`, { method: 'POST' }),
+
   skipTrendingPost: (postId: number) =>
     request(`/trending/${postId}/skip`, { method: 'POST' }),
 
