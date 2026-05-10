@@ -18,9 +18,11 @@ from bot.modules.source_collector import (
 
 
 class TestBuildSourceUrl:
-    def test_home_feed_points_to_chronological(self):
+    def test_home_feed_points_to_home_php(self):
+        # /?sk=h_chr never hydrates in headless chromium. /home.php renders
+        # the same virtualized feed but hydrates reliably.
         src = {"type": "home_feed"}
-        assert build_source_url(src) == "https://www.facebook.com/?sk=h_chr"
+        assert build_source_url(src) == "https://www.facebook.com/home.php"
 
     def test_group_uses_fb_entity_id(self):
         src = {"type": "group", "fb_entity_id": "123456"}
