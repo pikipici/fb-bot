@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ExternalLink,
@@ -19,6 +19,7 @@ import { toast } from 'sonner'
 
 import { api } from '../services/api'
 import { AppHeader } from '@/components/app-header'
+import { ScannerIndicator } from '@/components/scanner-indicator'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -519,11 +520,6 @@ export default function Trending() {
           }`
         : ''
 
-  const lastUpdatedLabel = useMemo(() => {
-    if (!trendingQuery.dataUpdatedAt) return '—'
-    return formatRelative(new Date(trendingQuery.dataUpdatedAt).toISOString())
-  }, [trendingQuery.dataUpdatedAt])
-
   // When filters change, close any open draft since the post may not be in
   // the current page anymore.
   useEffect(() => {
@@ -546,10 +542,8 @@ export default function Trending() {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <span className="text-muted-foreground hidden text-xs sm:inline">
-              update: {lastUpdatedLabel}
-            </span>
+          <div className="flex flex-wrap items-center gap-2">
+            <ScannerIndicator />
             <Button
               variant="outline"
               size="sm"

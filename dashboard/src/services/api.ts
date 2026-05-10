@@ -198,4 +198,10 @@ export const api = {
     const qs = q.toString()
     return request(`/history${qs ? `?${qs}` : ''}`)
   },
+
+  // Scanner (audit trail + manual trigger)
+  getScannerStatus: () => request('/scanner/status'),
+
+  runScanNow: () =>
+    request('/scanner/run-now', { method: 'POST' }),
 }
