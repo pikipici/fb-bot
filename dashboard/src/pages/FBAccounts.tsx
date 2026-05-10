@@ -1,8 +1,46 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useAuthStore } from '../store/authStore'
-import { useNavigate } from 'react-router-dom'
+import { Loader2, Pencil, Plus, RotateCw, Trash2, Users } from 'lucide-react'
+import { toast } from 'sonner'
+
 import { api } from '../services/api'
+import { AppHeader } from '@/components/app-header'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 interface FBAccount {
   id: number
@@ -18,14 +56,36 @@ interface FBAccount {
   created_at: string
 }
 
+type FormState = {
+  label: string
+  email: string
+  password: string
+  purpose: string
+  notes: string
+}
+
+const initialForm: FormState = {
+  label: '',
+  email: '',
+  password: '',
+  purpose: 'both',
+  notes: '',
+}
+
+const statusBadgeVariant: Record<string, React.ComponentProps<typeof Badge>['variant']> = {
+  ACTIVE: 'success',
+  COOLDOWN: 'warning',
+  BLOCKED: 'destructive',
+  DISABLED: 'outline',
+}
+
 export default function FBAccounts() {
-  const { username, role, logout } = useAuthStore()
-  const navigate = useNavigate()
   const queryClient = useQueryClient()
 
-  const [showForm, setShowForm] = useState(false)
+  const [dialogOpen, setDialogOpen] = useState(false)
   const [editId, setEditId] = useState<number | null>(null)
-  const [form, setForm] = useState({ label: '', email: '', password: '', purpose: 'both', notes: '' })
+  const [form, setForm] = useState<FormState>(initialForm)
+  const [pendingDelete, setPendingDelete] = useState<FBAccount | null>(null)
 
   const { data, isLoading } = useQuery({
     queryKey: ['fbAccounts'],
@@ -33,38 +93,58 @@ export default function FBAccounts() {
   })
 
   const createMutation = useMutation({
-    mutationFn: (data: typeof form) => api.createFBAccount(data),
+    mutationFn: (payload: FormState) => api.createFBAccount(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fbAccounts'] })
+      toast.success('Account created')
       resetForm()
     },
+    onError: (err: any) => toast.error(err.message || 'Create failed'),
   })
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: number; data: Partial<typeof form> }) => api.updateFBAccount(id, data),
+    mutationFn: ({ id, payload }: { id: number; payload: Partial<FormState> }) =>
+      api.updateFBAccount(id, payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['fbAccounts'] })
+      toast.success('Account updated')
       resetForm()
     },
+    onError: (err: any) => toast.error(err.message || 'Update failed'),
   })
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.deleteFBAccount(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['fbAccounts'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['fbAccounts'] })
+      toast.success('Account deleted')
+      setPendingDelete(null)
+    },
+    onError: (err: any) => toast.error(err.message || 'Delete failed'),
   })
 
   const reactivateMutation = useMutation({
     mutationFn: (id: number) => api.reactivateFBAccount(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['fbAccounts'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['fbAccounts'] })
+      toast.success('Account reactivated')
+    },
+    onError: (err: any) => toast.error(err.message || 'Reactivate failed'),
   })
 
   function resetForm() {
-    setForm({ label: '', email: '', password: '', purpose: 'both', notes: '' })
-    setShowForm(false)
+    setForm(initialForm)
+    setDialogOpen(false)
     setEditId(null)
   }
 
-  function handleEdit(account: FBAccount) {
+  function openCreate() {
+    setForm(initialForm)
+    setEditId(null)
+    setDialogOpen(true)
+  }
+
+  function openEdit(account: FBAccount) {
     setForm({
       label: account.label,
       email: account.email,
@@ -73,216 +153,250 @@ export default function FBAccounts() {
       notes: account.notes || '',
     })
     setEditId(account.id)
-    setShowForm(true)
+    setDialogOpen(true)
   }
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     if (editId) {
-      const data: Record<string, string> = {}
-      if (form.label) data.label = form.label
-      if (form.email) data.email = form.email
-      if (form.password) data.password = form.password
-      if (form.purpose) data.purpose = form.purpose
-      data.notes = form.notes
-      updateMutation.mutate({ id: editId, data })
+      const payload: Partial<FormState> = {}
+      if (form.label) payload.label = form.label
+      if (form.email) payload.email = form.email
+      if (form.password) payload.password = form.password
+      if (form.purpose) payload.purpose = form.purpose
+      payload.notes = form.notes
+      updateMutation.mutate({ id: editId, payload })
     } else {
       createMutation.mutate(form)
     }
   }
 
-  function handleDelete(id: number, label: string) {
-    if (confirm(`Delete account "${label}"? This cannot be undone.`)) {
-      deleteMutation.mutate(id)
-    }
-  }
-
-  const handleLogout = () => { logout(); navigate('/login') }
-
-  const accounts: FBAccount[] = data?.accounts || []
-
-  const statusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      ACTIVE: 'bg-green-900 text-green-300',
-      COOLDOWN: 'bg-yellow-900 text-yellow-300',
-      BLOCKED: 'bg-red-900 text-red-300',
-      DISABLED: 'bg-gray-700 text-gray-400',
-    }
-    return colors[status] || 'bg-gray-700 text-gray-300'
-  }
+  const accounts: FBAccount[] = data?.accounts ?? []
+  const submitting = createMutation.isPending || updateMutation.isPending
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white">
-      <header className="bg-gray-800 border-b border-gray-700 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <h1 className="text-lg font-bold">FB Engagement Assistant</h1>
-          <nav className="flex gap-2 text-sm">
-            <button onClick={() => navigate('/')} className="text-gray-400 hover:text-white px-2 py-1">Review</button>
-            <button className="text-white bg-gray-700 px-2 py-1 rounded">Accounts</button>
-          </nav>
-        </div>
-        <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-400">
-            {username} <span className="text-xs bg-gray-700 px-2 py-0.5 rounded">{role}</span>
-          </span>
-          <button onClick={handleLogout} className="text-sm text-red-400 hover:text-red-300">Logout</button>
-        </div>
-      </header>
+    <div className="bg-background min-h-screen">
+      <AppHeader />
 
-      <main className="max-w-5xl mx-auto p-6">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold">Facebook Accounts</h2>
-          <button
-            onClick={() => { resetForm(); setShowForm(true) }}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-medium"
-          >
-            + Add Account
-          </button>
-        </div>
-
-        {/* Form */}
-        {showForm && (
-          <div className="bg-gray-800 rounded-lg p-6 mb-6 border border-gray-700">
-            <h3 className="text-lg font-medium mb-4">{editId ? 'Edit Account' : 'Add New Account'}</h3>
-            <form onSubmit={handleSubmit} className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">Label</label>
-                <input
-                  type="text"
-                  value={form.label}
-                  onChange={(e) => setForm({ ...form, label: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500"
-                  placeholder="e.g. Account 1"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">Email / Phone</label>
-                <input
-                  type="text"
-                  value={form.email}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500"
-                  placeholder="email@example.com"
-                  required={!editId}
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">
-                  Password {editId && <span className="text-gray-500">(leave empty to keep current)</span>}
-                </label>
-                <input
-                  type="password"
-                  value={form.password}
-                  onChange={(e) => setForm({ ...form, password: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500"
-                  required={!editId}
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-gray-300 mb-1">Purpose</label>
-                <select
-                  value={form.purpose}
-                  onChange={(e) => setForm({ ...form, purpose: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500"
-                >
-                  <option value="both">Both (Scrape + Post)</option>
-                  <option value="scrape">Scrape Only</option>
-                  <option value="post">Post Only</option>
-                </select>
-              </div>
-              <div className="col-span-2">
-                <label className="block text-sm text-gray-300 mb-1">Notes</label>
-                <input
-                  type="text"
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500"
-                  placeholder="Optional notes..."
-                />
-              </div>
-              <div className="col-span-2 flex gap-3">
-                <button
-                  type="submit"
-                  className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded text-sm font-medium"
-                >
-                  {editId ? 'Save Changes' : 'Add Account'}
-                </button>
-                <button
-                  type="button"
-                  onClick={resetForm}
-                  className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded text-sm font-medium"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
+      <main className="mx-auto max-w-5xl p-4 sm:p-6">
+        <div className="mb-6 flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-2xl font-semibold tracking-tight">Facebook Accounts</h2>
+            <p className="text-muted-foreground text-sm">
+              Manage accounts used by scraper and poster workers.
+            </p>
           </div>
+          <Button onClick={openCreate}>
+            <Plus />
+            Add Account
+          </Button>
+        </div>
+
+        {isLoading && (
+          <Card className="flex items-center justify-center py-12">
+            <Loader2 className="text-muted-foreground h-5 w-5 animate-spin" />
+          </Card>
         )}
 
-        {/* Account List */}
-        {isLoading && <p className="text-gray-400">Loading accounts...</p>}
-
         {!isLoading && accounts.length === 0 && (
-          <div className="bg-gray-800 rounded-lg p-8 text-center text-gray-400">
-            No Facebook accounts added yet.
-          </div>
+          <Card className="py-12">
+            <CardContent className="flex flex-col items-center justify-center gap-2 text-center">
+              <Users className="text-muted-foreground h-8 w-8" />
+              <p className="text-muted-foreground text-sm">
+                No Facebook accounts added yet.
+              </p>
+            </CardContent>
+          </Card>
         )}
 
         <div className="space-y-3">
           {accounts.map((account) => (
-            <div key={account.id} className="bg-gray-800 rounded-lg p-4 border border-gray-700">
-              <div className="flex items-center justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-1">
-                    <span className="font-medium">{account.label}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded ${statusBadge(account.status)}`}>
-                      {account.status}
-                    </span>
-                    <span className="text-xs bg-gray-700 text-gray-300 px-2 py-0.5 rounded">
-                      {account.purpose}
-                    </span>
+            <Card key={account.id}>
+              <CardHeader>
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CardTitle className="text-base">{account.label}</CardTitle>
+                      <Badge variant={statusBadgeVariant[account.status] ?? 'outline'}>
+                        {account.status}
+                      </Badge>
+                      <Badge variant="outline" className="uppercase">
+                        {account.purpose}
+                      </Badge>
+                    </div>
+                    <CardDescription>{account.email}</CardDescription>
                   </div>
-                  <div className="text-sm text-gray-400 flex gap-4">
-                    <span>{account.email}</span>
-                    <span>Uses: {account.total_uses}</span>
-                    <span>Failures: {account.failure_count}</span>
-                    {account.last_used_at && (
-                      <span>Last used: {new Date(account.last_used_at).toLocaleString()}</span>
-                    )}
-                  </div>
-                  {account.notes && (
-                    <p className="text-xs text-gray-500 mt-1">{account.notes}</p>
-                  )}
-                </div>
 
-                <div className="flex gap-2 shrink-0">
-                  {account.status === 'BLOCKED' && (
-                    <button
-                      onClick={() => reactivateMutation.mutate(account.id)}
-                      className="px-3 py-1.5 bg-yellow-700 hover:bg-yellow-600 rounded text-sm"
+                  <div className="flex shrink-0 gap-2">
+                    {account.status === 'BLOCKED' && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => reactivateMutation.mutate(account.id)}
+                        disabled={reactivateMutation.isPending}
+                      >
+                        <RotateCw />
+                        Reactivate
+                      </Button>
+                    )}
+                    <Button size="sm" variant="outline" onClick={() => openEdit(account)}>
+                      <Pencil />
+                      Edit
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="destructive"
+                      onClick={() => setPendingDelete(account)}
                     >
-                      Reactivate
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleEdit(account)}
-                    className="px-3 py-1.5 bg-blue-700 hover:bg-blue-600 rounded text-sm"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    onClick={() => handleDelete(account.id, account.label)}
-                    className="px-3 py-1.5 bg-red-700 hover:bg-red-600 rounded text-sm"
-                  >
-                    Delete
-                  </button>
+                      <Trash2 />
+                      Delete
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            </div>
+              </CardHeader>
+              <CardContent className="text-muted-foreground flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                <span>Uses: {account.total_uses}</span>
+                <span>Failures: {account.failure_count}</span>
+                {account.last_used_at && (
+                  <span>
+                    Last used: {new Date(account.last_used_at).toLocaleString()}
+                  </span>
+                )}
+                {account.notes && <span className="italic">{account.notes}</span>}
+              </CardContent>
+            </Card>
           ))}
         </div>
       </main>
+
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => (open ? setDialogOpen(true) : resetForm())}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editId ? 'Edit Account' : 'Add New Account'}</DialogTitle>
+            <DialogDescription>
+              {editId
+                ? 'Update account info. Leave password empty to keep the current one.'
+                : 'Add a new Facebook account for the worker pool.'}
+            </DialogDescription>
+          </DialogHeader>
+
+          <form onSubmit={handleSubmit} className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="label">Label</Label>
+              <Input
+                id="label"
+                value={form.label}
+                onChange={(e) => setForm({ ...form, label: e.target.value })}
+                placeholder="e.g. Account 1"
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="email">Email / Phone</Label>
+              <Input
+                id="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                placeholder="email@example.com"
+                required={!editId}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="password">
+                Password
+                {editId && (
+                  <span className="text-muted-foreground text-xs font-normal">
+                    (leave empty to keep current)
+                  </span>
+                )}
+              </Label>
+              <Input
+                id="password"
+                type="password"
+                value={form.password}
+                onChange={(e) => setForm({ ...form, password: e.target.value })}
+                required={!editId}
+              />
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="purpose">Purpose</Label>
+              <Select
+                value={form.purpose}
+                onValueChange={(value) => setForm({ ...form, purpose: value })}
+              >
+                <SelectTrigger id="purpose" className="w-full">
+                  <SelectValue placeholder="Select purpose" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="both">Both (Scrape + Post)</SelectItem>
+                  <SelectItem value="scrape">Scrape Only</SelectItem>
+                  <SelectItem value="post">Post Only</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2 sm:col-span-2">
+              <Label htmlFor="notes">Notes</Label>
+              <Input
+                id="notes"
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                placeholder="Optional notes..."
+              />
+            </div>
+
+            <DialogFooter className="sm:col-span-2">
+              <Button type="button" variant="outline" onClick={resetForm}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={submitting}>
+                {submitting && <Loader2 className="animate-spin" />}
+                {editId ? 'Save Changes' : 'Add Account'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={!!pendingDelete}
+        onOpenChange={(open) => !open && setPendingDelete(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete account?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete{' '}
+              <span className="text-foreground font-medium">
+                {pendingDelete?.label}
+              </span>
+              . This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-white hover:bg-destructive/90"
+              disabled={deleteMutation.isPending}
+              onClick={(e) => {
+                e.preventDefault()
+                if (pendingDelete) deleteMutation.mutate(pendingDelete.id)
+              }}
+            >
+              {deleteMutation.isPending && <Loader2 className="animate-spin" />}
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }
