@@ -5,6 +5,7 @@ import { useAuthStore } from './store/authStore'
 import Login from './pages/Login'
 import ReviewQueue from './pages/ReviewQueue'
 import FBAccounts from './pages/FBAccounts'
+import Sources from './pages/Sources'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 
@@ -44,6 +45,14 @@ function App() {
               element={
                 <AdminRoute>
                   <FBAccounts />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/sources"
+              element={
+                <AdminRoute>
+                  <Sources />
                 </AdminRoute>
               }
             />

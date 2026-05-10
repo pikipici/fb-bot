@@ -19,6 +19,7 @@ async function request(path: string, options: RequestInit = {}) {
       headers['Authorization'] = `Bearer ${localStorage.getItem('access_token')}`
       const retry = await fetch(`${API_BASE}${path}`, { ...options, headers })
       if (!retry.ok) throw new Error(`HTTP ${retry.status}`)
+      if (retry.status === 204) return null
       return retry.json()
     }
     // Refresh failed, logout
@@ -31,6 +32,7 @@ async function request(path: string, options: RequestInit = {}) {
     const err = await res.json().catch(() => ({}))
     throw new Error(err.detail || `HTTP ${res.status}`)
   }
+  if (res.status === 204) return null
   return res.json()
 }
 
@@ -109,4 +111,44 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(data),
     }),
+
+  // Sources (scan targets: home_feed | group | page)
+  listSources: (enabledOnly = false) =>
+    request(`/sources?enabled_only=${enabledOnly}`),
+
+  createSource: (data: {
+    type: string
+    label: string
+    url?: string | null
+    fb_entity_id?: string | null
+    keywords_include?: string[]
+    keywords_exclude?: string[]
+    enabled?: boolean
+  }) =>
+    request('/sources', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  updateSource: (
+    id: number,
+    data: {
+      label?: string
+      url?: string | null
+      fb_entity_id?: string | null
+      keywords_include?: string[]
+      keywords_exclude?: string[]
+      enabled?: boolean
+    },
+  ) =>
+    request(`/sources/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+
+  toggleSource: (id: number) =>
+    request(`/sources/${id}/toggle`, { method: 'POST' }),
+
+  deleteSource: (id: number) =>
+    request(`/sources/${id}`, { method: 'DELETE' }),
 }

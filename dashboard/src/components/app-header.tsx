@@ -16,6 +16,7 @@ interface NavItem {
 
 const navItems: NavItem[] = [
   { to: '/', label: 'Review' },
+  { to: '/sources', label: 'Sumber', adminOnly: true },
   { to: '/accounts', label: 'Accounts', adminOnly: true },
 ]
 
