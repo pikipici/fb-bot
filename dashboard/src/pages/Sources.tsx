@@ -559,7 +559,7 @@ export default function Sources() {
                         ? 'https://www.facebook.com/groups/123456789'
                         : 'https://www.facebook.com/NamaPage'
                     }
-                    required={form.type !== 'home_feed'}
+                    required
                   />
                 </div>
                 <div className="space-y-2">
