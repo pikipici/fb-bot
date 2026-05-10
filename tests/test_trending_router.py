@@ -352,3 +352,219 @@ class TestFilters:
         )
         assert resp.status_code == 200
         assert len(resp.json()["posts"]) == 3
+
+
+class TestGenerateDraft:
+    def test_generates_draft_from_active_template(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p1", "score": 100, "reactions_total": 100,
+                 "author": "Budi", "text": "jual laptop gaming"},
+            ],
+        )
+        # Set active template
+        client.put(
+            "/api/v1/template",
+            json={"template_text": "Halo {author_name}, tertarik {text_snippet}?"},
+            headers=_auth(admin_token),
+        )
+        # Resolve post id from DB
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            post = db.query(TrendingPost).filter_by(fb_post_id="p1").first()
+            pid = post.id
+
+        resp = client.post(
+            f"/api/v1/trending/{pid}/draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["draft_text"] == "Halo Budi, tertarik jual laptop gaming?"
+        assert body["post"]["status"] == "DRAFTED"
+
+    def test_persists_status_transition(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p2", "score": 50, "reactions_total": 50},
+            ],
+        )
+        client.put(
+            "/api/v1/template",
+            json={"template_text": "hi"},
+            headers=_auth(admin_token),
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            pid = db.query(TrendingPost).filter_by(fb_post_id="p2").first().id
+        client.post(
+            f"/api/v1/trending/{pid}/draft", headers=_auth(admin_token)
+        )
+        # Re-list should now show DRAFTED
+        resp = client.get(
+            "/api/v1/trending?status=DRAFTED", headers=_auth(admin_token)
+        )
+        assert [p["fb_post_id"] for p in resp.json()["posts"]] == ["p2"]
+
+    def test_missing_template_returns_400(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p3", "score": 50, "reactions_total": 50},
+            ],
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            pid = db.query(TrendingPost).filter_by(fb_post_id="p3").first().id
+        resp = client.post(
+            f"/api/v1/trending/{pid}/draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 400
+
+    def test_unknown_post_returns_404(self, client, admin_token):
+        client.put(
+            "/api/v1/template",
+            json={"template_text": "hi"},
+            headers=_auth(admin_token),
+        )
+        resp = client.post(
+            "/api/v1/trending/99999/draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 404
+
+    def test_already_commented_returns_409(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p4", "score": 50, "reactions_total": 50,
+                 "status": "COMMENTED"},
+            ],
+        )
+        client.put(
+            "/api/v1/template",
+            json={"template_text": "hi"},
+            headers=_auth(admin_token),
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            pid = db.query(TrendingPost).filter_by(fb_post_id="p4").first().id
+        resp = client.post(
+            f"/api/v1/trending/{pid}/draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 409
+
+    def test_skipped_can_be_redrafted(self, client, admin_token):
+        # User skipped by mistake; drafting again is allowed.
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p5", "score": 50, "reactions_total": 50,
+                 "status": "SKIPPED"},
+            ],
+        )
+        client.put(
+            "/api/v1/template",
+            json={"template_text": "hi bro"},
+            headers=_auth(admin_token),
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            pid = db.query(TrendingPost).filter_by(fb_post_id="p5").first().id
+        resp = client.post(
+            f"/api/v1/trending/{pid}/draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["post"]["status"] == "DRAFTED"
+
+    def test_drafted_post_redraft_regenerates_text(self, client, admin_token):
+        # If user already drafted and template changed, they can regen.
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p6", "score": 50, "reactions_total": 50,
+                 "status": "DRAFTED"},
+            ],
+        )
+        client.put(
+            "/api/v1/template",
+            json={"template_text": "template baru versi 2"},
+            headers=_auth(admin_token),
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            pid = db.query(TrendingPost).filter_by(fb_post_id="p6").first().id
+        resp = client.post(
+            f"/api/v1/trending/{pid}/draft", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["draft_text"] == "template baru versi 2"
+
+    def test_viewer_cannot_generate_draft(self, client, viewer_token, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "p7", "score": 50, "reactions_total": 50},
+            ],
+        )
+        client.put(
+            "/api/v1/template",
+            json={"template_text": "hi"},
+            headers=_auth(admin_token),
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            pid = db.query(TrendingPost).filter_by(fb_post_id="p7").first().id
+        resp = client.post(
+            f"/api/v1/trending/{pid}/draft", headers=_auth(viewer_token)
+        )
+        assert resp.status_code == 403
+
+
+class TestSkipPost:
+    def test_skip_transitions_to_skipped(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "s1", "score": 50, "reactions_total": 50},
+            ],
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            pid = db.query(TrendingPost).filter_by(fb_post_id="s1").first().id
+        resp = client.post(
+            f"/api/v1/trending/{pid}/skip", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 200
+        assert resp.json()["post"]["status"] == "SKIPPED"
+
+    def test_skip_commented_returns_409(self, client, admin_token):
+        _seed_posts(
+            client,
+            [
+                {"source_type": "home_feed", "source_label": "Beranda",
+                 "fb_post_id": "s2", "score": 50, "reactions_total": 50,
+                 "status": "COMMENTED"},
+            ],
+        )
+        SessionLocal = client._session_factory  # type: ignore[attr-defined]
+        with SessionLocal() as db:
+            pid = db.query(TrendingPost).filter_by(fb_post_id="s2").first().id
+        resp = client.post(
+            f"/api/v1/trending/{pid}/skip", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 409
+
+    def test_skip_unknown_post_returns_404(self, client, admin_token):
+        resp = client.post(
+            "/api/v1/trending/99999/skip", headers=_auth(admin_token)
+        )
+        assert resp.status_code == 404
