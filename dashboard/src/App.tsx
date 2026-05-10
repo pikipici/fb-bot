@@ -7,6 +7,7 @@ import ReviewQueue from './pages/ReviewQueue'
 import FBAccounts from './pages/FBAccounts'
 import Sources from './pages/Sources'
 import Trending from './pages/Trending'
+import Template from './pages/Template'
 import { ThemeProvider } from '@/components/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 
@@ -62,6 +63,14 @@ function App() {
               element={
                 <AdminRoute>
                   <Sources />
+                </AdminRoute>
+              }
+            />
+            <Route
+              path="/template"
+              element={
+                <AdminRoute>
+                  <Template />
                 </AdminRoute>
               }
             />

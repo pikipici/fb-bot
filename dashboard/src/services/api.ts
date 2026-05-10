@@ -167,4 +167,13 @@ export const api = {
     const qs = q.toString()
     return request(`/trending${qs ? `?${qs}` : ''}`)
   },
+
+  // Comment template (single active row MVP)
+  getTemplate: () => request('/template'),
+
+  upsertTemplate: (templateText: string) =>
+    request('/template', {
+      method: 'PUT',
+      body: JSON.stringify({ template_text: templateText }),
+    }),
 }

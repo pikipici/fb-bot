@@ -18,6 +18,7 @@ const navItems: NavItem[] = [
   { to: '/', label: 'Trending' },
   { to: '/review', label: 'Review' },
   { to: '/sources', label: 'Sumber', adminOnly: true },
+  { to: '/template', label: 'Template', adminOnly: true },
   { to: '/accounts', label: 'Accounts', adminOnly: true },
 ]
 
