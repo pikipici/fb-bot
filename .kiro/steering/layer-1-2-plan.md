@@ -511,7 +511,7 @@ MVP: template cuma string literal, return as-is. Nanti bisa support placeholder 
 
 ---
 
-### Task F4b: Send Comment via Playwright `[ ]`
+### Task F4b: Send Comment via Playwright `[x]`
 
 **Objective:** Backend module yang pake Playwright pake session cookies → buka post URL → tunggu comment input muncul → type text (with per-char delay) → click submit → verify komen muncul di list → extract `fb_comment_id` kalau bisa.
 
