@@ -73,7 +73,6 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 
 | Tanggal | Status | Summary |
 |---------|--------|---------|
-| 2026-05-09 | fase 2 done | Scoring engine (fixed risk formula), detector (keyword/risk/language/duplicate), pipeline (filter→score→queue), post service (DB CRUD). 47 tests passed. Commit `3c638c0`. |
 | 2026-05-09 | fase 3 done | Draft engine (fallback chain + validator + fingerprint + randomization), draft service (DB + approval + audit log), orchestrator (full cycle), API routers wired to real DB. 93 tests passed. Commit `03edb51`. |
 | 2026-05-09 | fase 4 done | Parser (scrape+API normalize, engagement K/M, relative timestamps, lang detect), Scheduler (priority+cooldown+CB filter), Collector enhanced (Playwright scrape, Graph API, block detection, dedup), Celery app+tasks (beat schedule, collect_all/single). 164 tests passed. Commit `47fc043`. |
 | 2026-05-09 | fase 5 done | AI Generator (OpenAI+Ollama dual provider, prompt builder from ai_prompts.json, retry+timeout, env config), DraftEngine wired (_try_ai_draft calls AI generator with async bridge, fallback on fail/invalid), feature-flag gated. 188 tests passed. Commit `5a880ed`. |
@@ -81,6 +80,28 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 | 2026-05-09 | audit+fix fase A-F | Full-codebase audit (bot/server/dashboard). 43 security + 50 logic issues. Fixes: celery task contract (`58ad096`), security baseline JWT/Fernet/WS-header (fase B), data correctness scorer/parser/TZ/alembic FK (`a4c8235`), concurrency rate_guard/with_for_update/dedup-lock (fase D), ops hardening MarkdownV2/rotating-logs/atomic-recovery (`d534323`), regression tests CB/notifier/recovery (`84e7d6d`). |
 | 2026-05-10 | fase G deploy live | Root-cause server DB kosong (001 stamped tanpa tables) + worker crash `ModuleNotFoundError: server`. Fix: `alembic stamp base && alembic upgrade head` (8 tables fresh), systemd drop-in `pythonpath.conf` di worker+beat. Scorer freshness accept ISO string (`cf5b9f3`), test align draft/rate_guard dgn phase-D contract (`5ae32ee`). 274 tests passed. api+worker+beat active, `/api/v1/health` 200. HEAD `5ae32ee`. |
 | 2026-05-10 | fase H credentials UI | Re-enable fb-accounts credentials CRUD (admin-only). Uncomment router di `server/main.py`, AdminRoute guard + nav admin-only di dashboard, 14 router tests (auth guard + CRUD + validation + password-never-leaked). 287 tests passed. Dashboard rebuild 79 modules 912ms, API restart. `/api/v1/fb-accounts` live: admin-only CRUD + reactivate, Fernet-encrypted creds. HEAD `7bab96f`. |
+| 2026-05-10 | shadcn/ui migration (local only) | Dashboard UI design-system refactor ke shadcn/ui (style new-york, base neutral, dark+light+system toggle). Add deps Radix primitives + CVA + clsx + tailwind-merge + lucide-react + tw-animate-css + sonner. Setup path alias `@/*`, `components.json`, `src/lib/utils.ts` (cn), theme tokens di `src/index.css`, `ThemeProvider` + `ThemeToggle`, UI primitives (button, input, label, card, badge, alert, select, dialog, alert-dialog, dropdown-menu, separator, sonner, table), shared `AppHeader`. Refactor Login (Card+Form), ReviewQueue (Card list + toast), FBAccounts (Dialog form + AlertDialog delete + Select purpose + status badges). Cleanup Vite template (App.css + assets/hero|react|vite svg). Local only — belum `npm install`/build/deploy. |
+
+## Dashboard & API Access (SSH Tunnel)
+
+Local gak jalanin runtime; buat akses dashboard/API server (rdpkhorur) pakai SSH tunnel. Alias udah terpasang di `~/.bashrc`:
+
+| Alias | Fungsi | URL lokal |
+|-------|--------|-----------|
+| `fbtun` | Tunnel dashboard + API sekaligus (background, `-fN`) | http://localhost:8080, http://localhost:8100 |
+| `fbtun-dash` | Dashboard via nginx (UI + API + WS), foreground | http://localhost:8080 |
+| `fbtun-api` | API doang (bypass nginx), foreground | http://localhost:8100/api/v1/health |
+| `fbtun-status` | Cek tunnel background yang lagi jalan | — |
+| `fbtun-kill` | Kill tunnel background | — |
+| `fb-ssh` | SSH interactive ke server | — |
+
+Raw command (kalau alias belum ke-load):
+
+```
+ssh -fN -L 8080:127.0.0.1:80 -L 8100:127.0.0.1:8100 rdpkhorur
+```
+
+Server listen: nginx `:80` (dashboard static + proxy `/api/` + `/ws`), uvicorn API `127.0.0.1:8100`.
 
 ## Git Conventions
 
@@ -96,6 +117,5 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 ## Error Handling & Recovery
 
 - Kalau approach gagal 2x, stop dan diagnosa root cause. Jangan patch incremental tanpa paham masalahnya.
-- Kalau provider call gagal setelah wallet debit, otomatis refund dan mark failed.
 - Partial failure di multi-step operation: kasih recovery-friendly message, reload state, biarkan user/admin lanjut manual dari step yang gagal.
 - Log/event setiap state transition buat audit trail.
