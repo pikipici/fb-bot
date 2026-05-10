@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ExternalLink,
   Flame,
@@ -7,9 +7,12 @@ import {
   MessageCircle,
   RefreshCw,
   Repeat2,
+  Sparkles,
   ThumbsUp,
   TrendingUp,
+  X,
 } from 'lucide-react'
+import { toast } from 'sonner'
 
 import { api } from '../services/api'
 import { AppHeader } from '@/components/app-header'
@@ -28,6 +31,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import { useAuthStore } from '@/store/authStore'
 import { cn } from '@/lib/utils'
 
 type SortKey = 'score' | 'velocity' | 'recent'
@@ -69,6 +74,11 @@ interface SourceRow {
   label: string
 }
 
+interface DraftResponse {
+  draft_text: string
+  post: TrendingPost
+}
+
 const REFETCH_MS = 30_000
 
 function formatCount(n: number): string {
@@ -106,9 +116,32 @@ function statusBadge(status: string) {
   }
 }
 
-function PostCard({ post }: { post: TrendingPost }) {
+function PostCard({
+  post,
+  isAdmin,
+  activeDraft,
+  onStartDraft,
+  onCancelDraft,
+  onDraftChange,
+  onSkip,
+  isDrafting,
+  isSkipping,
+}: {
+  post: TrendingPost
+  isAdmin: boolean
+  activeDraft: string | null
+  onStartDraft: (postId: number) => void
+  onCancelDraft: () => void
+  onDraftChange: (text: string) => void
+  onSkip: (postId: number) => void
+  isDrafting: boolean
+  isSkipping: boolean
+}) {
   const text = post.text_snippet?.trim() || ''
   const truncated = text.length > 280 ? text.slice(0, 280) + '…' : text
+  const draftOpen = activeDraft !== null
+  const canDraft = isAdmin && post.status !== 'COMMENTED'
+  const canSkip = isAdmin && post.status !== 'COMMENTED'
 
   return (
     <Card className="flex flex-col overflow-hidden">
@@ -174,20 +207,82 @@ function PostCard({ post }: { post: TrendingPost }) {
             {formatCount(Math.round(post.score))}
           </span>
         </div>
+
+        {draftOpen && (
+          <div className="space-y-2 rounded-md border p-2">
+            <div className="text-muted-foreground flex items-center justify-between text-xs">
+              <span className="font-medium">Draft komen</span>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={onCancelDraft}
+              >
+                <X className="mr-1 h-3 w-3" />
+                Tutup
+              </Button>
+            </div>
+            <Textarea
+              value={activeDraft}
+              onChange={(e) => onDraftChange(e.target.value)}
+              className="min-h-[90px] font-mono text-sm"
+              placeholder="Teks komen..."
+            />
+            <div className="flex items-center justify-between">
+              <span className="text-muted-foreground text-[10px]">
+                Send belum aktif (Phase F5)
+              </span>
+              <Button size="sm" disabled title="Send tersedia di Phase F5">
+                Send
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
 
-      <CardFooter className="flex items-center justify-between border-t pt-3">
-        <Button variant="ghost" size="sm" disabled title="Tersedia di Phase F">
-          Generate Draft
-        </Button>
+      <CardFooter className="flex items-center justify-between gap-2 border-t pt-3">
+        <div className="flex items-center gap-2">
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={!canDraft || isDrafting || draftOpen}
+            onClick={() => onStartDraft(post.id)}
+            title={
+              post.status === 'COMMENTED'
+                ? 'Post udah di-commented'
+                : !isAdmin
+                  ? 'Butuh role admin'
+                  : 'Generate draft komen'
+            }
+          >
+            {isDrafting ? (
+              <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Sparkles className="mr-1.5 h-3.5 w-3.5" />
+            )}
+            {post.status === 'DRAFTED' ? 'Re-draft' : 'Generate Draft'}
+          </Button>
+          {post.status !== 'SKIPPED' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={!canSkip || isSkipping}
+              onClick={() => onSkip(post.id)}
+            >
+              {isSkipping ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              Skip
+            </Button>
+          )}
+        </div>
         {post.post_url ? (
           <Button
             variant="outline"
             size="sm"
             onClick={() => window.open(post.post_url!, '_blank', 'noopener,noreferrer')}
           >
-            Lihat di FB
-            <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+            <ExternalLink className="h-3.5 w-3.5" />
           </Button>
         ) : null}
       </CardFooter>
@@ -196,14 +291,24 @@ function PostCard({ post }: { post: TrendingPost }) {
 }
 
 export default function Trending() {
+  const role = useAuthStore((s) => s.role)
+  const isAdmin = role === 'admin'
+
   const [sort, setSort] = useState<SortKey>('score')
   const [status, setStatus] = useState<StatusKey>('ALL')
   const [sourceId, setSourceId] = useState<'ALL' | number>('ALL')
+
+  // Inline draft state: which post is being edited, and the current text.
+  const [draftingPostId, setDraftingPostId] = useState<number | null>(null)
+  const [draftText, setDraftText] = useState('')
+
+  const qc = useQueryClient()
 
   const sourcesQuery = useQuery<{ sources: SourceRow[]; total: number }>({
     queryKey: ['sources-compact'],
     queryFn: () => api.listSources(false),
     staleTime: 60_000,
+    enabled: isAdmin,
   })
 
   const trendingQuery = useQuery<TrendingResponse>({
@@ -219,6 +324,29 @@ export default function Trending() {
     refetchOnWindowFocus: true,
   })
 
+  const draftMutation = useMutation<DraftResponse, Error, number>({
+    mutationFn: (postId) => api.generateDraft(postId),
+    onSuccess: (data) => {
+      setDraftingPostId(data.post.id)
+      setDraftText(data.draft_text)
+      qc.invalidateQueries({ queryKey: ['trending'] })
+    },
+    onError: (err) => {
+      toast.error(err.message || 'Gagal generate draft')
+    },
+  })
+
+  const skipMutation = useMutation<unknown, Error, number>({
+    mutationFn: (postId) => api.skipTrendingPost(postId),
+    onSuccess: () => {
+      toast.success('Post di-skip')
+      qc.invalidateQueries({ queryKey: ['trending'] })
+    },
+    onError: (err) => {
+      toast.error(err.message || 'Gagal skip')
+    },
+  })
+
   const posts = trendingQuery.data?.posts ?? []
   const total = trendingQuery.data?.total ?? 0
   const sources = sourcesQuery.data?.sources ?? []
@@ -227,6 +355,13 @@ export default function Trending() {
     if (!trendingQuery.dataUpdatedAt) return '—'
     return formatRelative(new Date(trendingQuery.dataUpdatedAt).toISOString())
   }, [trendingQuery.dataUpdatedAt])
+
+  // When filters change, close any open draft since the post may not be in
+  // the current page anymore.
+  useEffect(() => {
+    setDraftingPostId(null)
+    setDraftText('')
+  }, [sort, status, sourceId])
 
   return (
     <div className="min-h-screen bg-background">
@@ -296,27 +431,29 @@ export default function Trending() {
               </Select>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="text-muted-foreground text-xs">Sumber</span>
-              <Select
-                value={sourceId === 'ALL' ? 'ALL' : String(sourceId)}
-                onValueChange={(v) =>
-                  setSourceId(v === 'ALL' ? 'ALL' : Number(v))
-                }
-              >
-                <SelectTrigger className="h-8 w-[180px]">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="ALL">Semua sumber</SelectItem>
-                  {sources.map((s) => (
-                    <SelectItem key={s.id} value={String(s.id)}>
-                      {s.label} ({s.type})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground text-xs">Sumber</span>
+                <Select
+                  value={sourceId === 'ALL' ? 'ALL' : String(sourceId)}
+                  onValueChange={(v) =>
+                    setSourceId(v === 'ALL' ? 'ALL' : Number(v))
+                  }
+                >
+                  <SelectTrigger className="h-8 w-[180px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="ALL">Semua sumber</SelectItem>
+                    {sources.map((s) => (
+                      <SelectItem key={s.id} value={String(s.id)}>
+                        {s.label} ({s.type})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             <div className="text-muted-foreground ml-auto text-xs">
               {total} post
@@ -350,7 +487,27 @@ export default function Trending() {
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {posts.map((post) => (
-              <PostCard key={post.id} post={post} />
+              <PostCard
+                key={post.id}
+                post={post}
+                isAdmin={isAdmin}
+                activeDraft={draftingPostId === post.id ? draftText : null}
+                onStartDraft={(pid) => draftMutation.mutate(pid)}
+                onCancelDraft={() => {
+                  setDraftingPostId(null)
+                  setDraftText('')
+                }}
+                onDraftChange={setDraftText}
+                onSkip={(pid) => skipMutation.mutate(pid)}
+                isDrafting={
+                  draftMutation.isPending &&
+                  draftMutation.variables === post.id
+                }
+                isSkipping={
+                  skipMutation.isPending &&
+                  skipMutation.variables === post.id
+                }
+              />
             ))}
           </div>
         )}

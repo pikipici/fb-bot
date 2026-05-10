@@ -176,4 +176,10 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ template_text: templateText }),
     }),
+
+  generateDraft: (postId: number) =>
+    request(`/trending/${postId}/draft`, { method: 'POST' }),
+
+  skipTrendingPost: (postId: number) =>
+    request(`/trending/${postId}/skip`, { method: 'POST' }),
 }
