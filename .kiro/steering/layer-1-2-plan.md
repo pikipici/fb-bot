@@ -477,7 +477,7 @@ is_trending = (
 
 ---
 
-### Task F3: Draft Generator — Source from Template `[ ]`
+### Task F3: Draft Generator — Source from Template `[x]`
 
 **Objective:** Endpoint `POST /api/v1/trending/{post_id}/draft` → generate draft dari template aktif → return `{draft_text}` + update `trending_posts.status = 'DRAFTED'`.
 
