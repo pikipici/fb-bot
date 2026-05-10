@@ -33,6 +33,7 @@ def fake_context(fake_page):
     ctx = MagicMock()
     ctx.new_page = AsyncMock(return_value=fake_page)
     ctx.close = AsyncMock()
+    ctx.add_cookies = AsyncMock()
     return ctx
 
 
