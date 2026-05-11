@@ -162,6 +162,35 @@ class TestScannerStatus:
         assert resp.status_code == 200
         assert resp.json()["last_run"]["inserted"] == 7
 
+    def test_timestamps_are_utc_explicit(self, client):
+        """Timestamps must carry explicit UTC marker (``Z`` or ``+00:00``).
+
+        SQLite loses ``tzinfo`` on write, so naive ``datetime.isoformat()``
+        output is ambiguous — browsers in JKT parse it as local time and
+        the UI shows "7j lalu" for a scan that finished 7m ago. Regression
+        guard: any non-null timestamp must end with ``Z`` or offset.
+        """
+        token = _register_and_login(client, "u", "Abcdef123!")
+        _seed_run(client, status="success", inserted=4)
+
+        resp = client.get(
+            "/api/v1/scanner/status",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert resp.status_code == 200
+        run = resp.json()["last_run"]
+        started = run["started_at"]
+        finished = run["finished_at"]
+        assert started is not None and finished is not None
+        # Accept either ``Z`` suffix or explicit ``+HH:MM`` offset.
+        for label, value in [("started_at", started), ("finished_at", finished)]:
+            assert (
+                value.endswith("Z")
+                or value.endswith("+00:00")
+                or "+" in value[-6:]
+                or "-" in value[-6:]
+            ), f"{label}={value!r} is timezone-naive (ambiguous)"
+
 
 class TestScannerRunNow:
     def test_requires_auth(self, client):

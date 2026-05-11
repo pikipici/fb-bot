@@ -31,16 +31,34 @@ router = APIRouter(prefix="/scanner", tags=["scanner"])
 _admin_only = require_role(Role.ADMIN)
 
 
+def _iso_utc(dt: datetime | None) -> str | None:
+    """Serialize a datetime as UTC ISO-8601 with explicit offset.
+
+    SQLite stores naive datetimes even when we wrote with ``tzinfo=utc``.
+    If we emit ``dt.isoformat()`` on a naive value, browsers in JKT
+    (UTC+7) parse it as local time and the UI shows ``"7j lalu"`` for a
+    scan that just finished — off by the local tz offset. Normalizing
+    to UTC + explicit suffix makes the wire format unambiguous.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    # ``isoformat()`` on a UTC-aware datetime renders ``+00:00``; replace
+    # with ``Z`` for the compact canonical form.
+    return dt.isoformat().replace("+00:00", "Z")
+
+
 def _serialize_run(run: ScannerRun) -> dict:
     return {
         "id": run.id,
         "task_id": run.task_id,
         "trigger": run.trigger,
         "status": run.status,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "finished_at": (
-            run.finished_at.isoformat() if run.finished_at else None
-        ),
+        "started_at": _iso_utc(run.started_at),
+        "finished_at": _iso_utc(run.finished_at),
         "enabled_sources": run.enabled_sources,
         "successful_scans": run.successful_scans,
         "scan_errors": run.scan_errors,
@@ -145,6 +163,6 @@ def trigger_scan_now(
 
     return {
         "task_id": async_result.id,
-        "enqueued_at": datetime.now(timezone.utc).isoformat(),
+        "enqueued_at": _iso_utc(datetime.now(timezone.utc)),
         "trigger": "manual",
     }
