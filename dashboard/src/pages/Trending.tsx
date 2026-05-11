@@ -134,7 +134,7 @@ function formatRelative(iso: string | null): string {
 function statusBadge(status: string) {
   switch (status) {
     case 'NEW':
-      return <Badge variant="default">Baru</Badge>
+      return <Badge variant="default">Belum komen</Badge>
     case 'DRAFTED':
       return <Badge variant="secondary">Drafted</Badge>
     case 'SKIPPED':
@@ -146,9 +146,31 @@ function statusBadge(status: string) {
   }
 }
 
+const LAST_SEEN_KEY = 'trending.lastSeenAt'
+
+function readLastSeen(): number {
+  try {
+    const raw = localStorage.getItem(LAST_SEEN_KEY)
+    if (!raw) return 0
+    const n = Number(raw)
+    return Number.isFinite(n) ? n : 0
+  } catch {
+    return 0
+  }
+}
+
+function writeLastSeen(ms: number) {
+  try {
+    localStorage.setItem(LAST_SEEN_KEY, String(ms))
+  } catch {
+    /* localStorage unavailable — silent */
+  }
+}
+
 function PostCard({
   post,
   isAdmin,
+  isFresh,
   activeDraft,
   onStartDraft,
   onCancelDraft,
@@ -165,6 +187,7 @@ function PostCard({
 }: {
   post: TrendingPost
   isAdmin: boolean
+  isFresh: boolean
   activeDraft: string | null
   onStartDraft: (postId: number) => void
   onCancelDraft: () => void
@@ -193,7 +216,13 @@ function PostCard({
     : sendDisabledReason
 
   return (
-    <Card className="flex flex-col overflow-hidden">
+    <Card
+      className={cn(
+        'flex flex-col overflow-hidden transition-shadow',
+        isFresh &&
+          'ring-2 ring-emerald-500/60 ring-offset-2 ring-offset-background',
+      )}
+    >
       {post.thumbnail_url && (
         <div className="bg-muted aspect-video w-full overflow-hidden">
           <img
@@ -223,16 +252,26 @@ function PostCard({
               <span>{formatRelative(post.collected_at)}</span>
             </div>
           </div>
-          {statusBadge(post.status)}
-          {unsupported && (
-            <Badge
-              variant="outline"
-              className="border-amber-500/50 bg-amber-500/10 text-amber-500"
-              title={`Tipe ${post.unsupported_kind} gak bisa dikomen via bot — Skip aja`}
-            >
-              {post.unsupported_kind}
-            </Badge>
-          )}
+          <div className="flex flex-wrap items-center gap-1">
+            {isFresh && (
+              <Badge
+                className="bg-emerald-600 hover:bg-emerald-600/90"
+                title="Post baru dari scan terakhir lu"
+              >
+                Baru
+              </Badge>
+            )}
+            {statusBadge(post.status)}
+            {unsupported && (
+              <Badge
+                variant="outline"
+                className="border-amber-500/50 bg-amber-500/10 text-amber-500"
+                title={`Tipe ${post.unsupported_kind} gak bisa dikomen via bot — Skip aja`}
+              >
+                {post.unsupported_kind}
+              </Badge>
+            )}
+          </div>
         </div>
       </CardHeader>
 
@@ -403,6 +442,17 @@ export default function Trending() {
   // Inline draft state: which post is being edited, and the current text.
   const [draftingPostId, setDraftingPostId] = useState<number | null>(null)
   const [draftText, setDraftText] = useState('')
+
+  // Freshness: posts whose ``collected_at`` is newer than ``lastSeenAt``
+  // get a green "Baru" badge + emerald ring. We snapshot on mount so the
+  // badge stays stable while the tab is open, then bump on unmount so
+  // the next visit starts clean. Persisted via localStorage.
+  const [lastSeenAt] = useState<number>(() => readLastSeen())
+  useEffect(() => {
+    return () => {
+      writeLastSeen(Date.now())
+    }
+  }, [])
 
   const qc = useQueryClient()
 
@@ -694,43 +744,53 @@ export default function Trending() {
           </Card>
         ) : (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {posts.map((post) => (
-              <PostCard
-                key={post.id}
-                post={post}
-                isAdmin={isAdmin}
-                activeDraft={draftingPostId === post.id ? draftText : null}
-                onStartDraft={(pid) => draftMutation.mutate(pid)}
-                onCancelDraft={() => {
-                  setDraftingPostId(null)
-                  setDraftText('')
-                }}
-                onDraftChange={setDraftText}
-                onSkip={(pid) => skipMutation.mutate(pid)}
-                onSend={(pid, text) =>
-                  sendMutation.mutate({ postId: pid, text })
-                }
-                onAIDraft={(pid) => aiDraftMutation.mutate(pid)}
-                isDrafting={
-                  draftMutation.isPending &&
-                  draftMutation.variables === post.id
-                }
-                isAIDrafting={
-                  aiDraftMutation.isPending &&
-                  aiDraftMutation.variables === post.id
-                }
-                isSkipping={
-                  skipMutation.isPending &&
-                  skipMutation.variables === post.id
-                }
-                isSending={
-                  sendMutation.isPending &&
-                  sendMutation.variables?.postId === post.id
-                }
-                sendDisabled={sendDisabled}
-                sendDisabledReason={sendDisabledReason}
-              />
-            ))}
+            {posts.map((post) => {
+              const collectedMs = post.collected_at
+                ? new Date(post.collected_at).getTime()
+                : 0
+              const isFresh =
+                lastSeenAt > 0 &&
+                Number.isFinite(collectedMs) &&
+                collectedMs > lastSeenAt
+              return (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  isAdmin={isAdmin}
+                  isFresh={isFresh}
+                  activeDraft={draftingPostId === post.id ? draftText : null}
+                  onStartDraft={(pid) => draftMutation.mutate(pid)}
+                  onCancelDraft={() => {
+                    setDraftingPostId(null)
+                    setDraftText('')
+                  }}
+                  onDraftChange={setDraftText}
+                  onSkip={(pid) => skipMutation.mutate(pid)}
+                  onSend={(pid, text) =>
+                    sendMutation.mutate({ postId: pid, text })
+                  }
+                  onAIDraft={(pid) => aiDraftMutation.mutate(pid)}
+                  isDrafting={
+                    draftMutation.isPending &&
+                    draftMutation.variables === post.id
+                  }
+                  isAIDrafting={
+                    aiDraftMutation.isPending &&
+                    aiDraftMutation.variables === post.id
+                  }
+                  isSkipping={
+                    skipMutation.isPending &&
+                    skipMutation.variables === post.id
+                  }
+                  isSending={
+                    sendMutation.isPending &&
+                    sendMutation.variables?.postId === post.id
+                  }
+                  sendDisabled={sendDisabled}
+                  sendDisabledReason={sendDisabledReason}
+                />
+              )
+            })}
           </div>
         )}
       </main>
