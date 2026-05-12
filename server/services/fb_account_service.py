@@ -312,3 +312,29 @@ class FBAccountService:
         account.cookies_expired_at = datetime.now(timezone.utc)
         self.db.commit()
         return True
+
+    def mark_active_from_profile(
+        self,
+        account_id: int,
+        fb_user_id: str,
+        fb_name: str | None,
+        fb_profile_pic_url: str | None,
+    ) -> bool:
+        """Flip an account back to ACTIVE after a successful re-validation.
+
+        Clears ``cookies_expired_at`` and refreshes the cached profile
+        fields with whatever the validator returned, so the dashboard card
+        shows the current FB display name / avatar without a separate
+        fetch. Cookie payload itself is not touched.
+        """
+        account = self.get_account(account_id)
+        if not account:
+            return False
+        account.status = "ACTIVE"
+        account.cookies_expired_at = None
+        account.failure_count = 0
+        account.fb_user_id = fb_user_id
+        account.fb_name = fb_name
+        account.fb_profile_pic_url = fb_profile_pic_url
+        self.db.commit()
+        return True

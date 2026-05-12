@@ -566,3 +566,130 @@ class TestCookieConnect:
             headers=_auth(viewer_token),
         )
         assert resp.status_code == 403
+
+
+class TestReValidate:
+    """POST /fb-accounts/{id}/re-validate — dry-run cookie re-check.
+
+    Decrypt stored cookies, hit ``m.facebook.com`` validator, flip the
+    account status without touching the stored cookie payload itself.
+    """
+
+    def _seed_cookie_account(self, client, admin_token, monkeypatch) -> int:
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo("100001", "Old Name", None)
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+        resp = client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={"label": "Main", "raw_cookies": "c_user=100001; xs=abc"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    def test_revalidate_success_marks_active_and_refreshes_profile(
+        self, client, admin_token, monkeypatch
+    ):
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+
+        # Simulate a prior EXPIRED flip so we can verify status bounces back.
+        from server import database as database_module
+        from server.models import FBAccount
+
+        with database_module.SessionLocal() as db:
+            account = db.query(FBAccount).filter(FBAccount.id == account_id).first()
+            account.status = "EXPIRED"
+            from datetime import datetime, timezone
+
+            account.cookies_expired_at = datetime.now(timezone.utc)
+            db.commit()
+
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo(
+                fb_user_id="100001",
+                name="New Display Name",
+                profile_pic_url="https://fb.test/new.jpg",
+            )
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            f"/api/v1/fb-accounts/{account_id}/re-validate",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["valid"] is True
+        assert body["account"]["status"] == "ACTIVE"
+        assert body["account"]["fb_name"] == "New Display Name"
+        assert body["account"]["fb_profile_pic_url"] == "https://fb.test/new.jpg"
+        assert body["account"]["cookies_expired_at"] is None
+
+    def test_revalidate_invalid_cookie_marks_expired(
+        self, client, admin_token, monkeypatch
+    ):
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+
+        from server.services.cookie_session_service import CookieValidationError
+
+        async def fake_validate(_cookies):
+            raise CookieValidationError("session expired")
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            f"/api/v1/fb-accounts/{account_id}/re-validate",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["valid"] is False
+        assert body["account"]["status"] == "EXPIRED"
+        assert body["account"]["cookies_expired_at"] is not None
+
+    def test_revalidate_on_manual_account_returns_400(
+        self, client, admin_token
+    ):
+        created = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Manual", "email": "m@fb.test", "password": "p"},
+            headers=_auth(admin_token),
+        ).json()
+        resp = client.post(
+            f"/api/v1/fb-accounts/{created['id']}/re-validate",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
+    def test_revalidate_unknown_account_returns_404(
+        self, client, admin_token
+    ):
+        resp = client.post(
+            "/api/v1/fb-accounts/9999/re-validate",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 404
+
+    def test_viewer_cannot_revalidate(
+        self, client, admin_token, viewer_token, monkeypatch
+    ):
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+        resp = client.post(
+            f"/api/v1/fb-accounts/{account_id}/re-validate",
+            headers=_auth(viewer_token),
+        )
+        assert resp.status_code == 403

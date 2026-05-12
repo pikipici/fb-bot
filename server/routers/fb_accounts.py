@@ -171,6 +171,73 @@ def reactivate_account(
     return svc.to_dict(account, include_email=True)
 
 
+@router.post("/{account_id}/re-validate")
+async def re_validate_account(
+    account_id: int,
+    user=Depends(_admin_only),
+    db: Session = Depends(get_db),
+):
+    """Dry-run cookie re-check for a stored cookie-connected account.
+
+    Decrypts the stored cookie, hits ``m.facebook.com`` via the same
+    validator used at connect time, then flips the account status
+    without mutating the stored cookie payload itself.
+
+    Returns ``{valid: bool, account: dict}``.
+
+    * ``200 valid=True``  — cookie passes, account flipped to ACTIVE,
+      ``cookies_expired_at`` cleared, profile fields refreshed from the
+      validator response (FB display name / avatar may have changed).
+    * ``200 valid=False`` — validator raised
+      :class:`CookieValidationError`; account flipped to EXPIRED,
+      ``cookies_expired_at`` stamped.
+    * ``400`` — account has no stored cookie (manual creds only).
+    * ``404`` — account does not exist.
+    """
+    svc = FBAccountService(db)
+    account = svc.get_account(account_id)
+    if not account:
+        raise HTTPException(404, "Account not found")
+    if not account.cookies_encrypted:
+        raise HTTPException(
+            400,
+            "Akun ini pakai kredensial manual, gak ada cookie yang bisa dicek",
+        )
+
+    cookies = svc.get_cookies(account_id)
+    if not cookies:
+        # Defensive — cookies_encrypted was truthy but decrypt yielded
+        # nothing. Treat as corrupted session so admin can re-upload.
+        svc.mark_cookies_expired(account_id)
+        refreshed = svc.get_account(account_id)
+        return {
+            "valid": False,
+            "account": svc.to_dict(refreshed, include_email=True),
+        }
+
+    try:
+        profile = await validate_and_fetch_profile(cookies)
+    except CookieValidationError:
+        svc.mark_cookies_expired(account_id)
+        refreshed = svc.get_account(account_id)
+        return {
+            "valid": False,
+            "account": svc.to_dict(refreshed, include_email=True),
+        }
+
+    svc.mark_active_from_profile(
+        account_id,
+        fb_user_id=profile.fb_user_id,
+        fb_name=profile.name,
+        fb_profile_pic_url=profile.profile_pic_url,
+    )
+    refreshed = svc.get_account(account_id)
+    return {
+        "valid": True,
+        "account": svc.to_dict(refreshed, include_email=True),
+    }
+
+
 # --- Cookie-session endpoints (Layer 1+2) --------------------------------
 
 
