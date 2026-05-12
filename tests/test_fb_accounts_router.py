@@ -23,6 +23,14 @@ from server import auth as auth_module
 from server import database as database_module
 from server.database import Base, get_db
 
+# Pre-import server.main so every model (User, FBAccount, ...) is registered
+# with ``Base.metadata`` before the per-test ``client`` fixture calls
+# ``create_all``. Without this, an isolated test run (e.g. ``pytest
+# tests/test_fb_accounts_router.py::TestReValidate``) errors with
+# "no such table: users" because the first fixture invocation hits
+# create_all before server.main's router chain imports the User model.
+import server.main  # noqa: F401
+
 
 @pytest.fixture
 def client(tmp_path, monkeypatch):
