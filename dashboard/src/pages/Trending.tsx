@@ -435,7 +435,7 @@ export default function Trending() {
   const role = useAuthStore((s) => s.role)
   const isAdmin = role === 'admin'
 
-  const [sort, setSort] = useState<SortKey>('score')
+  const [sort, setSort] = useState<SortKey>('recent')
   const [status, setStatus] = useState<StatusKey>('ALL')
   const [sourceId, setSourceId] = useState<'ALL' | number>('ALL')
 
