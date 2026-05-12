@@ -338,3 +338,35 @@ class FBAccountService:
         account.fb_profile_pic_url = fb_profile_pic_url
         self.db.commit()
         return True
+
+    def replace_cookies(
+        self,
+        account_id: int,
+        cookies: dict[str, str],
+        fb_user_id: str,
+        fb_name: str | None,
+        fb_profile_pic_url: str | None,
+    ) -> bool:
+        """Swap the stored cookie bundle on an existing account.
+
+        Encrypts the new cookies with Fernet, replaces the old payload,
+        refreshes profile fields from the validator, clears
+        ``cookies_expired_at``, and flips status back to ACTIVE. Useful
+        when the user re-uploads a fresh cookie after a checkpoint or
+        expiry without wanting to delete the account (preserves label,
+        notes, and CommentHistory).
+        """
+        from server.crypto import encrypt_cookies
+
+        account = self.get_account(account_id)
+        if not account:
+            return False
+        account.cookies_encrypted = encrypt_cookies(cookies)
+        account.fb_user_id = fb_user_id
+        account.fb_name = fb_name
+        account.fb_profile_pic_url = fb_profile_pic_url
+        account.status = "ACTIVE"
+        account.cookies_expired_at = None
+        account.failure_count = 0
+        self.db.commit()
+        return True

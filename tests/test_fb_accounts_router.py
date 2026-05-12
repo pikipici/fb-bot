@@ -699,3 +699,172 @@ class TestReValidate:
             headers=_auth(viewer_token),
         )
         assert resp.status_code == 403
+
+
+class TestReUploadCookie:
+    """POST /fb-accounts/{id}/re-upload-cookie — in-place cookie refresh.
+
+    Unlike ``connect-cookie`` (which only creates a fresh account and is
+    blocked by the single-account invariant), re-upload lets admin swap
+    the stored cookie on an existing account while keeping ``label``,
+    ``notes``, and CommentHistory intact.
+    """
+
+    def _seed_cookie_account(self, client, admin_token, monkeypatch) -> int:
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo("100001", "Old", None)
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+        resp = client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={"label": "Main", "raw_cookies": "c_user=100001; xs=old"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    def test_reupload_happy_path_replaces_cookie_and_marks_active(
+        self, client, admin_token, monkeypatch
+    ):
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+
+        # Flip to EXPIRED first so we can verify re-upload flips back.
+        put_resp = client.put(
+            f"/api/v1/fb-accounts/{account_id}",
+            json={"status": "EXPIRED"},
+            headers=_auth(admin_token),
+        )
+        assert put_resp.status_code == 200
+
+        # Capture old cookies_encrypted to assert it actually changes.
+        from server import database as database_module
+        from server.models import FBAccount
+
+        with database_module.SessionLocal() as db:
+            old_cookies = db.query(FBAccount).filter(
+                FBAccount.id == account_id
+            ).first().cookies_encrypted
+
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo(
+                fb_user_id="100001",
+                name="Refreshed Name",
+                profile_pic_url="https://fb.test/refreshed.jpg",
+            )
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            f"/api/v1/fb-accounts/{account_id}/re-upload-cookie",
+            json={"raw_cookies": "c_user=100001; xs=brand-new; datr=xyz"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["account"]["status"] == "ACTIVE"
+        assert body["account"]["fb_name"] == "Refreshed Name"
+        assert body["account"]["fb_profile_pic_url"] == "https://fb.test/refreshed.jpg"
+        assert body["account"]["cookies_expired_at"] is None
+        # Cookie payload must not leak through response.
+        assert "cookies_encrypted" not in body["account"]
+        assert "raw_cookies" not in body
+
+        # Confirm cookie payload actually rotated in DB.
+        with database_module.SessionLocal() as db:
+            new_cookies = db.query(FBAccount).filter(
+                FBAccount.id == account_id
+            ).first().cookies_encrypted
+        assert new_cookies != old_cookies
+
+    def test_reupload_invalid_cookie_returns_400_and_keeps_old(
+        self, client, admin_token, monkeypatch
+    ):
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+
+        from server import database as database_module
+        from server.models import FBAccount
+
+        with database_module.SessionLocal() as db:
+            old = db.query(FBAccount).filter(FBAccount.id == account_id).first()
+            old_cookies = old.cookies_encrypted
+            old_status = old.status
+
+        from server.services.cookie_session_service import CookieValidationError
+
+        async def fake_validate(_cookies):
+            raise CookieValidationError("Cookie gak valid")
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            f"/api/v1/fb-accounts/{account_id}/re-upload-cookie",
+            json={"raw_cookies": "c_user=bad"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
+        # Old cookie + status must remain untouched.
+        with database_module.SessionLocal() as db:
+            cur = db.query(FBAccount).filter(FBAccount.id == account_id).first()
+            assert cur.cookies_encrypted == old_cookies
+            assert cur.status == old_status
+
+    def test_reupload_empty_body_returns_400(
+        self, client, admin_token, monkeypatch
+    ):
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+        resp = client.post(
+            f"/api/v1/fb-accounts/{account_id}/re-upload-cookie",
+            json={"raw_cookies": "   "},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
+    def test_reupload_on_manual_account_returns_400(
+        self, client, admin_token
+    ):
+        created = client.post(
+            "/api/v1/fb-accounts",
+            json={"label": "Manual", "email": "m@fb.test", "password": "p"},
+            headers=_auth(admin_token),
+        ).json()
+        resp = client.post(
+            f"/api/v1/fb-accounts/{created['id']}/re-upload-cookie",
+            json={"raw_cookies": "c_user=1; xs=a"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 400
+
+    def test_reupload_unknown_account_returns_404(
+        self, client, admin_token
+    ):
+        resp = client.post(
+            "/api/v1/fb-accounts/9999/re-upload-cookie",
+            json={"raw_cookies": "c_user=1; xs=a"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 404
+
+    def test_viewer_cannot_reupload(
+        self, client, admin_token, viewer_token, monkeypatch
+    ):
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+        resp = client.post(
+            f"/api/v1/fb-accounts/{account_id}/re-upload-cookie",
+            json={"raw_cookies": "c_user=1; xs=a"},
+            headers=_auth(viewer_token),
+        )
+        assert resp.status_code == 403

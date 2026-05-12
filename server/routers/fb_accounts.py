@@ -46,6 +46,10 @@ class ConnectCookieRequest(BaseModel):
     notes: str = ""
 
 
+class ReUploadCookieRequest(BaseModel):
+    raw_cookies: str
+
+
 @router.get("")
 def list_accounts(
     include_disabled: bool = False,
@@ -236,6 +240,61 @@ async def re_validate_account(
         "valid": True,
         "account": svc.to_dict(refreshed, include_email=True),
     }
+
+
+@router.post("/{account_id}/re-upload-cookie")
+async def re_upload_cookie(
+    account_id: int,
+    req: ReUploadCookieRequest,
+    user=Depends(_admin_only),
+    db: Session = Depends(get_db),
+):
+    """In-place cookie refresh for an existing cookie-connected account.
+
+    Unlike ``connect-cookie`` (which only creates a new row and is
+    blocked by the single-account invariant when one already exists),
+    this endpoint lets admin swap the stored cookie payload on an
+    existing account while keeping ``label``, ``notes``, and the entire
+    CommentHistory trail intact.
+
+    Flow:
+      1. 400 if ``raw_cookies`` blank.
+      2. 404 if account unknown.
+      3. 400 if account has no ``cookies_encrypted`` (manual creds — use
+         the regular PUT endpoint instead).
+      4. Parse + validate new cookie via ``m.facebook.com/me``. If the
+         validator rejects it, 400 — old cookie stays untouched.
+      5. Encrypt new cookie, replace payload, refresh profile fields,
+         clear ``cookies_expired_at``, flip status to ACTIVE.
+    """
+    if not req.raw_cookies or not req.raw_cookies.strip():
+        raise HTTPException(400, "raw_cookies kosong")
+
+    svc = FBAccountService(db)
+    account = svc.get_account(account_id)
+    if not account:
+        raise HTTPException(404, "Account not found")
+    if not account.cookies_encrypted:
+        raise HTTPException(
+            400,
+            "Akun ini pakai kredensial manual, pakai endpoint update biasa",
+        )
+
+    cookies = parse_cookie_string(req.raw_cookies)
+    try:
+        profile = await validate_and_fetch_profile(cookies)
+    except CookieValidationError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+    svc.replace_cookies(
+        account_id,
+        cookies=cookies,
+        fb_user_id=profile.fb_user_id,
+        fb_name=profile.name,
+        fb_profile_pic_url=profile.profile_pic_url,
+    )
+    refreshed = svc.get_account(account_id)
+    return {"account": svc.to_dict(refreshed, include_email=True)}
 
 
 # --- Cookie-session endpoints (Layer 1+2) --------------------------------
