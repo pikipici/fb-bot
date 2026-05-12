@@ -598,17 +598,15 @@ class TestReValidate:
     ):
         account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
 
-        # Simulate a prior EXPIRED flip so we can verify status bounces back.
-        from server import database as database_module
-        from server.models import FBAccount
-
-        with database_module.SessionLocal() as db:
-            account = db.query(FBAccount).filter(FBAccount.id == account_id).first()
-            account.status = "EXPIRED"
-            from datetime import datetime, timezone
-
-            account.cookies_expired_at = datetime.now(timezone.utc)
-            db.commit()
+        # Simulate a prior EXPIRED flip via the regular PUT endpoint so we
+        # can verify re-validate bounces status back to ACTIVE.
+        put_resp = client.put(
+            f"/api/v1/fb-accounts/{account_id}",
+            json={"status": "EXPIRED"},
+            headers=_auth(admin_token),
+        )
+        assert put_resp.status_code == 200
+        assert put_resp.json()["status"] == "EXPIRED"
 
         from server.services import cookie_session_service as css
 
