@@ -38,12 +38,14 @@ export function AccountStatusBanner() {
   if (!account) return null
 
   const status = account.status as string
-  if (status !== 'EXPIRED' && status !== 'BLOCKED') return null
+  if (status !== 'EXPIRED' && status !== 'BLOCKED' && status !== 'CHECKPOINT') return null
 
   const message =
     status === 'EXPIRED'
       ? 'Cookie FB lu expired — scanner & send gak bakal jalan sampai di-reconnect.'
-      : 'Akun FB terblokir oleh Facebook — scanner & send ditahan.'
+      : status === 'CHECKPOINT'
+        ? 'FB minta checkpoint/verifikasi. Selesain di browser dulu, lalu re-upload cookie yang baru.'
+        : 'Akun FB terblokir oleh Facebook — scanner & send ditahan.'
 
   const canManage = role === 'admin'
 

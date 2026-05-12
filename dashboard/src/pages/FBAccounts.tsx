@@ -99,6 +99,7 @@ const statusBadgeVariant: Record<string, React.ComponentProps<typeof Badge>['var
   BLOCKED: 'destructive',
   DISABLED: 'outline',
   EXPIRED: 'destructive',
+  CHECKPOINT: 'warning',
 }
 
 export default function FBAccounts() {
@@ -402,6 +403,15 @@ export default function FBAccounts() {
                   <span>
                     Cookie lu udah expired. Hapus akun ini dan connect ulang
                     pake cookie yang fresh.
+                  </span>
+                </div>
+              )}
+              {account.status === 'CHECKPOINT' && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">
+                  <ShieldAlert className="size-4 shrink-0" />
+                  <span>
+                    FB minta checkpoint/verifikasi tambahan. Buka akun di
+                    browser, selesain verifikasi, lalu re-upload cookie baru.
                   </span>
                 </div>
               )}
