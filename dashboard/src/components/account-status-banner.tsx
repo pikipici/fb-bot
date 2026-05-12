@@ -48,6 +48,10 @@ export function AccountStatusBanner() {
         : 'Akun FB terblokir oleh Facebook — scanner & send ditahan.'
 
   const canManage = role === 'admin'
+  // EXPIRED/CHECKPOINT share the re-upload recovery flow; BLOCKED is a
+  // separate operator action ("Reactivate"), so we only deep-link the
+  // first two into the re-upload dialog.
+  const needsReupload = status === 'EXPIRED' || status === 'CHECKPOINT'
 
   return (
     <div className="bg-destructive/10 text-destructive border-destructive/30 border-b">
@@ -59,7 +63,11 @@ export function AccountStatusBanner() {
             size="sm"
             variant="outline"
             className="border-destructive/40 text-destructive hover:bg-destructive/20"
-            onClick={() => navigate('/accounts')}
+            onClick={() =>
+              navigate(
+                needsReupload ? '/accounts?action=reupload' : '/accounts',
+              )
+            }
           >
             Buka Accounts
           </Button>

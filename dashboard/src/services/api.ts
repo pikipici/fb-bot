@@ -103,6 +103,15 @@ export const api = {
       body: JSON.stringify(data),
     }),
 
+  reValidateFBAccount: (id: number) =>
+    request(`/fb-accounts/${id}/re-validate`, { method: 'POST' }),
+
+  reUploadFBCookie: (id: number, rawCookies: string) =>
+    request(`/fb-accounts/${id}/re-upload-cookie`, {
+      method: 'POST',
+      body: JSON.stringify({ raw_cookies: rawCookies }),
+    }),
+
   // Sources (scan targets: home_feed | group | page)
   listSources: (enabledOnly = false) =>
     request(`/sources?enabled_only=${enabledOnly}`),

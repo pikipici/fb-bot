@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CheckCircle2,
@@ -9,6 +10,7 @@ import {
   Pencil,
   RotateCw,
   ShieldAlert,
+  ShieldCheck,
   Trash2,
   UserPlus,
 } from 'lucide-react'
@@ -104,6 +106,7 @@ const statusBadgeVariant: Record<string, React.ComponentProps<typeof Badge>['var
 
 export default function FBAccounts() {
   const queryClient = useQueryClient()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const [mode, setMode] = useState<'setup' | 'edit'>('setup')
@@ -113,6 +116,14 @@ export default function FBAccounts() {
   const [cookieRaw, setCookieRaw] = useState('')
   const [cookiePreview, setCookiePreview] = useState<CookiePreview | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
+
+  // F7 re-upload cookie dialog state. Kept separate from setup dialog so a
+  // stale setup draft doesn't bleed into the refresh flow and vice-versa.
+  const [reuploadOpen, setReuploadOpen] = useState(false)
+  const [reuploadRaw, setReuploadRaw] = useState('')
+  const [reuploadPreview, setReuploadPreview] = useState<CookiePreview | null>(
+    null,
+  )
 
   const { data, isLoading } = useQuery({
     queryKey: ['fbAccountCurrent'],
@@ -185,6 +196,42 @@ export default function FBAccounts() {
     onError: (err: any) => toast.error(err.message || 'Gagal reactivate akun'),
   })
 
+  const revalidateMutation = useMutation({
+    mutationFn: (id: number) => api.reValidateFBAccount(id),
+    onSuccess: (data: { valid: boolean }) => {
+      queryClient.invalidateQueries({ queryKey: ['fbAccountCurrent'] })
+      if (data?.valid) {
+        toast.success('Cookie masih valid, akun balik ACTIVE')
+      } else {
+        toast.error('Cookie gak valid lagi — re-upload cookie baru')
+      }
+    },
+    onError: (err: any) => toast.error(err.message || 'Gagal re-validate'),
+  })
+
+  const reuploadPreviewMutation = useMutation({
+    mutationFn: (raw: string) => api.previewFBCookie(raw),
+    onSuccess: (data) => {
+      setReuploadPreview(data.preview)
+      toast.success('Cookie valid, cek preview di bawah')
+    },
+    onError: (err: any) => {
+      setReuploadPreview(null)
+      toast.error(err.message || 'Cookie gak valid')
+    },
+  })
+
+  const reuploadMutation = useMutation({
+    mutationFn: ({ id, raw }: { id: number; raw: string }) =>
+      api.reUploadFBCookie(id, raw),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['fbAccountCurrent'] })
+      toast.success('Cookie di-replace, akun balik ACTIVE')
+      closeReupload()
+    },
+    onError: (err: any) => toast.error(err.message || 'Gagal re-upload cookie'),
+  })
+
   useEffect(() => {
     if (!dialogOpen) return
     if (mode === 'edit' && account) {
@@ -221,6 +268,45 @@ export default function FBAccounts() {
     setCookieRaw('')
     setCookiePreview(null)
   }
+
+  function closeReupload() {
+    setReuploadOpen(false)
+    setReuploadRaw('')
+    setReuploadPreview(null)
+  }
+
+  function openReupload() {
+    setReuploadOpen(true)
+  }
+
+  function handleReuploadPreview() {
+    if (!reuploadRaw.trim()) {
+      toast.error('Paste cookie baru dulu')
+      return
+    }
+    reuploadPreviewMutation.mutate(reuploadRaw)
+  }
+
+  function handleReuploadSubmit() {
+    if (!account) return
+    if (!reuploadPreview) {
+      toast.error('Preview dulu cookie-nya biar yakin valid')
+      return
+    }
+    reuploadMutation.mutate({ id: account.id, raw: reuploadRaw })
+  }
+
+  // Deep-link from AccountStatusBanner: ``?action=reupload`` auto-opens
+  // the re-upload dialog once the account has loaded. Strip the param
+  // afterwards so reloading the page doesn't keep re-opening it.
+  useEffect(() => {
+    if (searchParams.get('action') !== 'reupload') return
+    if (!account) return
+    setReuploadOpen(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('action')
+    setSearchParams(next, { replace: true })
+  }, [searchParams, account, setSearchParams])
 
   function handleManualSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -356,6 +442,29 @@ export default function FBAccounts() {
                       Reactivate
                     </Button>
                   )}
+                  {isCookieAccount && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => revalidateMutation.mutate(account.id)}
+                      disabled={revalidateMutation.isPending}
+                    >
+                      {revalidateMutation.isPending ? (
+                        <Loader2 className="animate-spin" />
+                      ) : (
+                        <ShieldCheck />
+                      )}
+                      Re-validate
+                    </Button>
+                  )}
+                  {isCookieAccount &&
+                    (account.status === 'EXPIRED' ||
+                      account.status === 'CHECKPOINT') && (
+                      <Button size="sm" onClick={openReupload}>
+                        <Cookie />
+                        Re-upload Cookie
+                      </Button>
+                    )}
                   {!isCookieAccount && (
                     <Button size="sm" variant="outline" onClick={openEdit}>
                       <Pencil />
@@ -401,8 +510,9 @@ export default function FBAccounts() {
                 <div className="text-destructive flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 p-3 text-xs">
                   <ShieldAlert className="size-4 shrink-0" />
                   <span>
-                    Cookie lu udah expired. Hapus akun ini dan connect ulang
-                    pake cookie yang fresh.
+                    Cookie lu udah expired. Klik{' '}
+                    <span className="font-medium">Re-upload Cookie</span> buat
+                    replace cookie tanpa hapus akun.
                   </span>
                 </div>
               )}
@@ -571,6 +681,103 @@ export default function FBAccounts() {
               </TabsContent>
             </Tabs>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={reuploadOpen}
+        onOpenChange={(open) => (open ? setReuploadOpen(true) : closeReupload())}
+      >
+        <DialogContent className="sm:max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Re-upload Cookie</DialogTitle>
+            <DialogDescription>
+              Replace cookie akun{' '}
+              <span className="text-foreground font-medium">
+                {account?.label}
+              </span>{' '}
+              tanpa hapus history komen / label / notes.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="min-w-0 space-y-4">
+            <CookieInstructions />
+
+            <div className="space-y-2">
+              <Label htmlFor="reupload-raw">Cookie String Baru</Label>
+              <Textarea
+                id="reupload-raw"
+                value={reuploadRaw}
+                onChange={(e) => {
+                  setReuploadRaw(e.target.value)
+                  setReuploadPreview(null)
+                }}
+                placeholder="c_user=...; xs=...; datr=...; fr=...;"
+                wrap="soft"
+                className="min-h-28 max-w-full font-mono text-xs break-all whitespace-pre-wrap"
+              />
+              <p className="text-muted-foreground text-xs">
+                Format Header String dari Cookie-Editor. Jangan paste format
+                JSON.
+              </p>
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleReuploadPreview}
+                disabled={reuploadPreviewMutation.isPending}
+              >
+                {reuploadPreviewMutation.isPending && (
+                  <Loader2 className="animate-spin" />
+                )}
+                Preview Akun
+              </Button>
+            </div>
+
+            {reuploadPreview && (
+              <div className="bg-muted/40 flex items-center gap-3 rounded-md border p-3">
+                {reuploadPreview.profile_pic_url ? (
+                  <img
+                    src={reuploadPreview.profile_pic_url}
+                    alt={reuploadPreview.name}
+                    className="size-12 rounded-full border"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <div className="bg-muted text-muted-foreground flex size-12 items-center justify-center rounded-full">
+                    <UserPlus className="size-5" />
+                  </div>
+                )}
+                <div className="flex-1">
+                  <p className="flex items-center gap-2 text-sm font-medium">
+                    <CheckCircle2 className="size-4 text-green-500" />
+                    {reuploadPreview.name}
+                  </p>
+                  <p className="text-muted-foreground text-xs">
+                    FB ID {reuploadPreview.fb_user_id}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <DialogFooter>
+              <Button variant="outline" onClick={closeReupload}>
+                Batal
+              </Button>
+              <Button
+                onClick={handleReuploadSubmit}
+                disabled={!reuploadPreview || reuploadMutation.isPending}
+              >
+                {reuploadMutation.isPending && (
+                  <Loader2 className="animate-spin" />
+                )}
+                Replace Cookie
+              </Button>
+            </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
 
