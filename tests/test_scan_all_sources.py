@@ -256,6 +256,79 @@ class TestScanAllSourcesLogic:
             assert call.kwargs.get("user_agent") == pinned_ua
             assert call.kwargs.get("viewport") == pinned_vp
 
+    def test_applies_startup_jitter_before_first_scan(
+        self, db, account_with_cookies, sources, monkeypatch
+    ):
+        """Phase I-D-1 — orchestrator sleeps a short random jitter at
+        the very start of a scan cycle so beat ticks don't all fire
+        against FB on the same second wall-clock boundary.
+
+        We assert:
+        - ``_sleep_startup_jitter`` is awaited exactly once.
+        - It is awaited BEFORE the first ``scan_source``.
+        """
+        from bot.tasks import _run_scan_all_sources
+
+        call_order: list[str] = []
+
+        async def _fake_jitter(*_args, **_kwargs) -> None:
+            call_order.append("jitter")
+
+        scan_mock = AsyncMock(
+            side_effect=lambda source, cookies, **_: (
+                call_order.append(f"scan:{source['id']}")
+                or _mock_result(int(source["id"]))
+            )
+        )
+        monkeypatch.setattr("bot.tasks.scan_source", scan_mock)
+        monkeypatch.setattr(
+            "bot.tasks._sleep_startup_jitter", _fake_jitter
+        )
+
+        _run_scan_all_sources(db)
+
+        assert call_order.count("jitter") == 1, call_order
+        assert call_order[0] == "jitter", call_order
+
+    def test_applies_inter_source_think_time_between_sources(
+        self, db, account_with_cookies, sources, monkeypatch
+    ):
+        """Phase I-D-1 — orchestrator inserts a random think-time sleep
+        BETWEEN sources within one cycle (not before the first, not after
+        the last) to mimic human browsing rhythm.
+
+        Two enabled sources → one inter-source delay expected.
+        """
+        from bot.tasks import _run_scan_all_sources
+
+        call_order: list[str] = []
+
+        async def _fake_think(*_args, **_kwargs) -> None:
+            call_order.append("think")
+
+        scan_mock = AsyncMock(
+            side_effect=lambda source, cookies, **_: (
+                call_order.append(f"scan:{source['id']}")
+                or _mock_result(int(source["id"]))
+            )
+        )
+        monkeypatch.setattr("bot.tasks.scan_source", scan_mock)
+        monkeypatch.setattr(
+            "bot.tasks._sleep_inter_source", _fake_think
+        )
+
+        _run_scan_all_sources(db)
+
+        # Two enabled sources → scan, think, scan.
+        scan_events = [e for e in call_order if e.startswith("scan:")]
+        think_events = [e for e in call_order if e == "think"]
+        assert len(scan_events) == 2, call_order
+        assert len(think_events) == 1, call_order
+        # Think must sit between the two scans, not before or after.
+        scan_idx = [i for i, e in enumerate(call_order) if e.startswith("scan:")]
+        think_idx = call_order.index("think")
+        assert scan_idx[0] < think_idx < scan_idx[1], call_order
+
     def test_wires_cookie_rotation_callback_into_scan_source(
         self, db, account_with_cookies, sources, monkeypatch
     ):
