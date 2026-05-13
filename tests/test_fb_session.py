@@ -7,6 +7,7 @@ import pytest
 
 from bot.modules.fb_session import (
     DEFAULT_USER_AGENT,
+    capture_cookies_from_context,
     cookies_dict_to_playwright_format,
     create_session_context,
 )
@@ -141,3 +142,87 @@ class TestCreateSessionContext:
         kwargs = mock_browser.new_context.call_args.kwargs
         assert kwargs.get("locale", "").startswith("id")
         assert kwargs.get("timezone_id") == "Asia/Jakarta"
+
+
+# --- capture_cookies_from_context (Phase I-B-1) ---------------------------
+
+
+@pytest.mark.asyncio
+class TestCaptureCookiesFromContext:
+    """Phase I-B-1 — after a successful scan/send we must harvest the
+    current cookie state from the live BrowserContext so any rotated
+    session cookies (e.g. FB rotating ``xs`` mid-session) get persisted
+    back. Without this the DB row goes stale and the next tick uses the
+    pre-rotation cookie that FB has already invalidated.
+    """
+
+    async def test_flattens_context_cookies_to_dict(self):
+        ctx = MagicMock()
+        ctx.cookies = AsyncMock(
+            return_value=[
+                {
+                    "name": "c_user",
+                    "value": "12345",
+                    "domain": ".facebook.com",
+                },
+                {"name": "xs", "value": "abc|def", "domain": ".facebook.com"},
+                {"name": "datr", "value": "D", "domain": ".facebook.com"},
+            ]
+        )
+
+        out = await capture_cookies_from_context(ctx)
+
+        assert out == {"c_user": "12345", "xs": "abc|def", "datr": "D"}
+        ctx.cookies.assert_awaited_once()
+
+    async def test_filters_non_facebook_domains(self):
+        ctx = MagicMock()
+        ctx.cookies = AsyncMock(
+            return_value=[
+                {"name": "c_user", "value": "1", "domain": ".facebook.com"},
+                {"name": "junk", "value": "x", "domain": ".otherdomain.com"},
+                {"name": "ad_id", "value": "y", "domain": ".google.com"},
+            ]
+        )
+
+        out = await capture_cookies_from_context(ctx)
+
+        assert out == {"c_user": "1"}
+
+    async def test_keeps_m_and_www_subdomains(self):
+        """m.facebook.com and www.facebook.com cookies must be preserved."""
+        ctx = MagicMock()
+        ctx.cookies = AsyncMock(
+            return_value=[
+                {"name": "c_user", "value": "1", "domain": ".facebook.com"},
+                {
+                    "name": "mobile_flag",
+                    "value": "m",
+                    "domain": "m.facebook.com",
+                },
+                {
+                    "name": "web_flag",
+                    "value": "w",
+                    "domain": "www.facebook.com",
+                },
+            ]
+        )
+
+        out = await capture_cookies_from_context(ctx)
+
+        assert out == {
+            "c_user": "1",
+            "mobile_flag": "m",
+            "web_flag": "w",
+        }
+
+    async def test_empty_cookie_list_returns_empty_dict(self):
+        ctx = MagicMock()
+        ctx.cookies = AsyncMock(return_value=[])
+        assert await capture_cookies_from_context(ctx) == {}
+
+    async def test_none_return_tolerated(self):
+        """Some playwright mocks return None; don't crash."""
+        ctx = MagicMock()
+        ctx.cookies = AsyncMock(return_value=None)
+        assert await capture_cookies_from_context(ctx) == {}
