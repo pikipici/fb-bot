@@ -75,7 +75,7 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 > bawah tetap immutable history.
 
 **Last shipped:** Phase I-E stealth init script (2026-05-13,
-HEAD `f3d2113`). Full suite 677 pass, services live.
+HEAD `ffa3d83`). Full suite 677 pass, services live.
 
 **Phase I progress:**
 - ✅ I-A Per-account fingerprint pinning
@@ -84,19 +84,26 @@ HEAD `f3d2113`). Full suite 677 pass, services live.
 - ✅ I-D Scanner cadence (interval + jitter + think-time)
 - ✅ I-E Stealth patch (`navigator.webdriver=false` + plugins/languages/window.chrome)
 
-**Pending decision — 3 opsi next:**
+**Observation window OPEN (opsi 1 dipilih):**
 
-1. **Stop observe 24-48 jam** — I-A+I-B+I-D+I-E semua live, biarin combined
-   effect terukur di akun live sebelum putusin lanjut I-C atau Phase J.
-   **[REKOMENDASI GUE]**
-2. **Re-upload cookie akun id=1** (status=EXPIRED sekarang) → baru benefit
-   Phase I kerasa. Bisa langsung liat apakah cookie lifetime beneran lebih panjang.
-3. **Gas I-C** — skip observation, persistent profile sekarang. Lebih invasive
-   (DB column + path mgmt + refactor launch pattern). ~45-60 menit.
+- **Tstart:** 2026-05-13 11:05 UTC (cookie akun id=1 re-upload, flip EXPIRED→ACTIVE).
+- **Window target:** 24-48 jam → recheck 2026-05-14 11:05 UTC (24h) + 2026-05-15 11:05 UTC (48h).
+- **Pre-window baseline (sebelum re-upload):** 5 ScannerRun terakhir semua `aborted=no_active_account` — Phase I stealth fix efektif idle karena gak ada akun ACTIVE.
+- **T+0 post-reupload smoke (manual scan id=234, 2026-05-13 11:06→11:12 UTC, 5:56 durasi):**
+  - Scanner `success`, 2/2 source ok, 2 post baru di-insert, 0 error.
+  - UA Chrome/132 + viewport 1536x864 pinned (I-A verified stable).
+  - **I-B cookie rotation beneran jalan di live:** `xs` + `fr` rotated vs baseline, `datr`/`c_user`/`sb` stable (identity markers, expected).
+  - Akun status tetap ACTIVE setelah session real Playwright (bukan cuma post-validator).
+- **Metric yang di-track selama window:**
+  1. FBAccount id=1 status — stay ACTIVE vs flip EXPIRED/CHECKPOINT.
+  2. ScannerRun success rate tiap 30-menit beat tick.
+  3. Cookie hash evolution (`xs`/`fr` rotation cadence, `datr`/`c_user`/`sb` stability).
+  4. Ada/ga `CookieExpiredError` di worker log.
+- **Rollout criteria (plan §5):** kalau 24-48h akun tetap ACTIVE + cookie jalan lancar → Phase I dianggap sukses, I-C di-skip, lanjut Phase J. Kalau EXPIRED/CHECKPOINT re-muncul → unblock I-C (persistent browser profile).
 
-**Alasan rekomendasi opsi 1:** semua cheap/medium-cost stealth fix Phase I
-udah shipped. I-C invasive, mending tunggu data dulu sesuai plan §5 — kalau
-I-A..I-E udah cukup extend cookie lifetime, I-C bisa di-skip langsung ke Phase J.
+**Pending pas window tutup:**
+- Kalau stable → arsip plan ke `phase-i-session-hardening.md` §done, ganti pointer ke Phase J opener.
+- Kalau fail → eksekusi I-C sesuai roadmap `.kiro/steering/phase-i-session-hardening.md` §I-C.
 
 ## Activity Log
 

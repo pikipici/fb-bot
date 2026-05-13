@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { ThemeToggle } from '@/components/theme-toggle'
-import { QuotaWidget } from '@/components/quota-widget'
+import { CommentActivityWidget } from '@/components/comment-activity-widget'
 import { AccountStatusBanner } from '@/components/account-status-banner'
 import { cn } from '@/lib/utils'
 
@@ -63,7 +63,7 @@ export function AppHeader() {
         </div>
 
         <div className="flex items-center gap-2">
-          <QuotaWidget />
+          <CommentActivityWidget />
           <div className="text-muted-foreground hidden items-center gap-2 text-xs sm:flex">
             <span>{username}</span>
             {role && (
