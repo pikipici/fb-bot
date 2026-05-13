@@ -271,6 +271,7 @@ async def scan_source(
     cookies: dict[str, str],
     *,
     user_agent: str = DEFAULT_USER_AGENT,
+    viewport: dict[str, int] | None = None,
     max_posts: int = 40,
 ) -> SourceCollectorResult:
     """Scrape one source and return its posts.
@@ -299,7 +300,7 @@ async def scan_source(
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             context = await create_session_context(
-                browser, cookies, user_agent=user_agent
+                browser, cookies, user_agent=user_agent, viewport=viewport,
             )
             page = await context.new_page()
 

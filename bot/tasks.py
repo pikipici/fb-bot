@@ -384,6 +384,9 @@ def _mark_cookies_expired(db: Session, account) -> None:
 async def _scan_enabled_sources(
     sources: list,
     cookies: dict,
+    *,
+    user_agent: str | None = None,
+    viewport: dict[str, int] | None = None,
 ) -> tuple[list[SourceCollectorResult], bool]:
     """Run ``scan_source`` for each source sequentially.
 
@@ -391,6 +394,11 @@ async def _scan_enabled_sources(
     is raised the scan is aborted immediately and we surface the flag
     so the caller can flip the account to ``EXPIRED`` without trying
     the remaining sources.
+
+    ``user_agent`` / ``viewport`` come from
+    ``FBAccountService.ensure_fingerprint`` — pinned per-account by the
+    orchestrator so every source scan within this run presents the
+    exact same fingerprint to FB.
     """
     results: list[SourceCollectorResult] = []
     for src in sources:
@@ -402,7 +410,12 @@ async def _scan_enabled_sources(
             "fb_entity_id": src.fb_entity_id,
         }
         try:
-            result = await scan_source(source_dict, cookies)
+            scan_kwargs: dict[str, Any] = {}
+            if user_agent:
+                scan_kwargs["user_agent"] = user_agent
+            if viewport:
+                scan_kwargs["viewport"] = viewport
+            result = await scan_source(source_dict, cookies, **scan_kwargs)
         except CookieExpiredError as exc:
             logger.warning(
                 "scan aborted — cookie expired on source %s: %s",
@@ -451,6 +464,15 @@ def _run_scan_all_sources(db: Session) -> dict[str, Any]:
             "skipped": 0,
         }
 
+    # Phase I-A-3 — pin browser fingerprint (UA + viewport) per-account.
+    # Stable across sources within this run and across runs across days —
+    # makes FB anti-bot see a consistent device for this session cookie.
+    from server.services.fb_account_service import FBAccountService
+
+    fp_svc = FBAccountService(db)
+    pinned_ua, pinned_w, pinned_h = fp_svc.ensure_fingerprint(account.id)
+    pinned_viewport = {"width": pinned_w, "height": pinned_h}
+
     sources = (
         db.query(Source)
         .filter(Source.enabled.is_(True))
@@ -470,7 +492,9 @@ def _run_scan_all_sources(db: Session) -> dict[str, Any]:
         }
 
     results, cookie_expired = asyncio.run(
-        _scan_enabled_sources(sources, cookies)
+        _scan_enabled_sources(
+            sources, cookies, user_agent=pinned_ua, viewport=pinned_viewport,
+        )
     )
 
     if cookie_expired:

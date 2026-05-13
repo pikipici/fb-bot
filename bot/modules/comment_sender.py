@@ -359,6 +359,7 @@ async def send_comment(
     delay_range_ms: tuple[int, int] = DEFAULT_DELAY_RANGE_MS,
     headless: bool = True,
     user_agent: str | None = None,
+    viewport: dict[str, int] | None = None,
 ) -> SendResult:
     """Post ``comment_text`` as a comment under ``post_url``.
 
@@ -385,7 +386,7 @@ async def send_comment(
         try:
             browser = await pw.chromium.launch(headless=headless)
             context = await create_session_context(
-                browser, cookies, user_agent=user_agent
+                browser, cookies, user_agent=user_agent, viewport=viewport,
             )
             page = await context.new_page()
 

@@ -416,6 +416,15 @@ async def send_post_comment(
 
     display_name = account.fb_name or account.label or "me"
 
+    # Phase I-A-3 — pin browser fingerprint (UA + viewport) per-account so
+    # FB sees a stable device for this session cookie.
+    from server.services.fb_account_service import FBAccountService
+
+    pinned_ua, pinned_w, pinned_h = FBAccountService(db).ensure_fingerprint(
+        account.id
+    )
+    pinned_viewport = {"width": pinned_w, "height": pinned_h}
+
     # Actually post to Facebook via Playwright.
     try:
         result = await send_comment(
@@ -423,6 +432,8 @@ async def send_post_comment(
             comment_text=stripped,
             cookies=cookies,
             display_name=display_name,
+            user_agent=pinned_ua,
+            viewport=pinned_viewport,
         )
     except CookieExpiredError as exc:
         logger.warning(
