@@ -73,6 +73,7 @@ def mock_playwright_stack():
     context = MagicMock()
     context.new_page = AsyncMock(return_value=page)
     context.add_cookies = AsyncMock()
+    context.add_init_script = AsyncMock()
     context.close = AsyncMock()
 
     browser = MagicMock()

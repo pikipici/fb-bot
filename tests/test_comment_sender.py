@@ -34,6 +34,7 @@ def fake_context(fake_page):
     ctx.new_page = AsyncMock(return_value=fake_page)
     ctx.close = AsyncMock()
     ctx.add_cookies = AsyncMock()
+    ctx.add_init_script = AsyncMock()
     return ctx
 
 
