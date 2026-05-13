@@ -1,7 +1,10 @@
 """Rate Limit Service — rolling-window quota untuk comment sender (Layer 2).
 
-MVP: hardcoded 5 komen / 6 jam. Schema support multi-account tapi MVP cuma
-single active FB account jadi quota global (tidak per ``fb_account_id``).
+MVP: hardcoded 5 komen / 6 jam default, tapi ``MAX_COMMENTS_PER_WINDOW`` env
+var bisa override limit-nya (mis. set ke ``9999`` buat efektif bypass preflight
+tanpa ripping out service — rollback-friendly kalau perlu dibalikin lagi).
+Schema support multi-account tapi MVP cuma single active FB account jadi quota
+global (tidak per ``fb_account_id``).
 
 Usage::
 
@@ -28,6 +31,7 @@ Kalau status SENT, juga auto-flip :class:`TrendingPost.status` ke
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -42,10 +46,35 @@ logger = logging.getLogger(__name__)
 # --- MVP constants ---------------------------------------------------------
 
 MAX_COMMENTS_PER_WINDOW: int = 5
-"""Max SENT rows yang boleh masuk dalam window aktif."""
+"""Default max SENT rows yang boleh masuk dalam window aktif.
+
+Bisa di-override via env ``MAX_COMMENTS_PER_WINDOW`` (int). Invalid/unset →
+fallback ke konstanta ini. Lihat ``_max_per_window``.
+"""
 
 WINDOW_HOURS: int = 6
 """Durasi rolling window dalam jam."""
+
+
+def _max_per_window() -> int:
+    """Resolve effective per-window limit: env var > constant default.
+
+    Invalid (non-int) atau missing env → fallback ``MAX_COMMENTS_PER_WINDOW``.
+    Dibaca tiap call biar bisa di-toggle tanpa restart — sesuai pola
+    ``os.getenv`` di service lain.
+    """
+    raw = os.getenv("MAX_COMMENTS_PER_WINDOW")
+    if raw is None or raw == "":
+        return MAX_COMMENTS_PER_WINDOW
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            "MAX_COMMENTS_PER_WINDOW=%r tidak valid int, pakai default %d",
+            raw,
+            MAX_COMMENTS_PER_WINDOW,
+        )
+        return MAX_COMMENTS_PER_WINDOW
 
 
 # --- errors ----------------------------------------------------------------
@@ -111,9 +140,10 @@ class RateLimitService:
         return rows
 
     def _compute_status(self, rows: list[CommentHistory]) -> QuotaStatus:
+        limit = _max_per_window()
         used = len(rows)
-        remaining = max(0, MAX_COMMENTS_PER_WINDOW - used)
-        allowed = used < MAX_COMMENTS_PER_WINDOW
+        remaining = max(0, limit - used)
+        allowed = used < limit
         resets_at: datetime | None = None
         if rows:
             oldest = rows[0].sent_at
@@ -125,7 +155,7 @@ class RateLimitService:
             allowed=allowed,
             used=used,
             remaining=remaining,
-            limit=MAX_COMMENTS_PER_WINDOW,
+            limit=limit,
             window_hours=WINDOW_HOURS,
             resets_at=resets_at,
         )
