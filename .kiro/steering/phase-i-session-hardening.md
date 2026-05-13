@@ -59,7 +59,11 @@ bikin Playwright session keliatan konsisten & manusiawi di mata FB anti-bot.
 **Objective:** Simpan UA + viewport per-akun di DB. Reuse tiap session biar FB
 ngeliat "device ini konsisten". Random cuma pas akun diciptakan, habis itu pin.
 
-#### I-A-1 Migration + model field `browser_ua`, `viewport_w`, `viewport_h`
+#### I-A-1 Migration + model field `browser_ua`, `viewport_w`, `viewport_h` `[x]` `e06186f`
+
+Shipped 2026-05-13. Alembic rev `005_fb_fingerprint`, model `FBAccount` +3 fields,
+test `test_create_fingerprint_fields_default_null` (RED `e8d4339` → GREEN `e06186f`).
+Server migrated (004 → 005), 645/645 test pass.
 
 **Files:**
 - Modify: `server/models.py:154-191` (FBAccount class)
@@ -123,7 +127,12 @@ git commit -m "feat(i-a): add browser_ua/viewport fields to fb_accounts"
 
 ---
 
-#### I-A-2 Service helper `ensure_fingerprint(account_id)`
+#### I-A-2 Service helper `ensure_fingerprint(account_id)` `[x]` `622fa2d`
+
+Shipped 2026-05-13. Pool `bot/modules/fingerprint_pool.py` (3 UA Chrome 131/132 +
+5 desktop viewports), service method `ensure_fingerprint` idempotent dengan
+partial-null safe (fields NULL diisi tanpa overwrite yang sudah set). 4 test
+pass. Commits: RED `c5d9b6c`, GREEN `622fa2d`.
 
 **Objective:** Helper yang lazy-assign UA+viewport kalau akun belum punya.
 Dipanggil dari scanner/sender sebelum create_session_context.
@@ -241,7 +250,12 @@ git commit -m "feat(i-a): ensure_fingerprint helper + UA/viewport pool"
 
 ---
 
-#### I-A-3 Wire fingerprint ke `create_session_context` + refactor callers
+#### I-A-3 Wire fingerprint ke `create_session_context` + refactor callers `[x]` `d66f604`
+
+Shipped 2026-05-13. `scan_source` + `send_comment` signature add
+`viewport=None`; `_run_scan_all_sources` + `send_comment` router call
+`ensure_fingerprint(account.id)` sebelum invoke. `DEFAULT_USER_AGENT`
+di-upgrade Chrome 120 → 131. 651/651 full suite pass. RED `c1e0b5a` → GREEN `d66f604`.
 
 **Objective:** Caller (`source_collector`, `comment_sender`) panggil
 `ensure_fingerprint` duluan, lalu pass UA+viewport ke `create_session_context`.
