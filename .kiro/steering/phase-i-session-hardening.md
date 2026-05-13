@@ -769,7 +769,20 @@ git commit -m "feat(i-c): cleanup browser profile on fb-account delete"
 **Objective:** Kurangin frekuensi scan dari 15 min → 25-35 min w/ jitter.
 Hilangin "beat yg terlalu robotik".
 
-#### I-D-1 Tune `SCAN_INTERVAL_SECONDS` default + add jitter
+#### I-D-1 Tune `SCAN_INTERVAL_SECONDS` default + add jitter `[x]` `3777354`
+
+Shipped 2026-05-13. `bot/celery_app.py _scan_interval()` default bumped
+900 → 1800 (30 min). `bot/tasks.py` +2 helpers `_sleep_startup_jitter()`
+(0-120s random) dan `_sleep_inter_source()` (30-90s random) broken out
+biar gampang di-monkeypatch di test. `_scan_enabled_sources` wires
+jitter di awal loop + think-time `if idx > 0`. 5 new test
+(test_celery_schedule 3x + test_scan_all_sources 2x) — autouse fixture
+`_no_scanner_sleep` no-op cadence buat existing tests (suite tetap fast).
+Full suite **671 passed** (+5 sejak I-B). Deploy: `sudo systemctl
+restart fb-bot-api fb-bot-worker fb-bot-beat` all active, beat reloaded
+clean, smoke verify `_scan_interval()==1800`, `_STARTUP_JITTER_MAX=120`,
+`_INTER_SOURCE_DELAY=30-90`. Commits: RED `9a1983f`, GREEN `3777354`,
+test-speedup `1db3561`.
 
 **Files:**
 - Modify: `bot/celery_app.py:48-49`
