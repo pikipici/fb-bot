@@ -36,12 +36,15 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from playwright.async_api import async_playwright
 
 from bot.modules.fb_auth_probe import is_login_wall, login_wall_reason
-from bot.modules.fb_session import create_session_context
+from bot.modules.fb_session import (
+    capture_cookies_from_context,
+    create_session_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -360,6 +363,9 @@ async def send_comment(
     headless: bool = True,
     user_agent: str | None = None,
     viewport: dict[str, int] | None = None,
+    on_cookies_refresh: Callable[
+        [dict[str, str]], Awaitable[None]
+    ] | None = None,
 ) -> SendResult:
     """Post ``comment_text`` as a comment under ``post_url``.
 
@@ -500,6 +506,20 @@ async def send_comment(
                     fb_comment_id = str(raw_id)
             except Exception:
                 fb_comment_id = None
+
+            # Phase I-B-3 — harvest rotated cookies from the live context
+            # before it closes. Best-effort: never let a callback failure
+            # poison an otherwise successful send.
+            if on_cookies_refresh is not None:
+                try:
+                    fresh = await capture_cookies_from_context(context)
+                    if fresh:
+                        await on_cookies_refresh(fresh)
+                except Exception:  # noqa: BLE001 — best-effort harvest
+                    logger.debug(
+                        "cookie refresh callback failed in sender",
+                        exc_info=True,
+                    )
 
             return SendResult(
                 success=True,

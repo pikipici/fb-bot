@@ -381,12 +381,33 @@ def _mark_cookies_expired(db: Session, account) -> None:
     db.commit()
 
 
+def _make_cookie_refresh_callback(db: Session, account_id: int):
+    """Build an async callback that persists rotated cookies to DB silently.
+
+    Phase I-B-3 — returns an ``async def`` closure suitable for
+    ``scan_source(on_cookies_refresh=...)``. Uses
+    ``FBAccountService.refresh_cookies_silent`` which only rewrites the
+    encrypted cookie blob (no status / profile mutation), so the callback
+    is safe to run even if the account was (concurrently) flipped to
+    EXPIRED by another code path.
+    """
+    from server.services.fb_account_service import FBAccountService
+
+    async def _refresh(new_cookies: dict[str, str]) -> None:
+        FBAccountService(db).refresh_cookies_silent(
+            account_id, cookies=new_cookies
+        )
+
+    return _refresh
+
+
 async def _scan_enabled_sources(
     sources: list,
     cookies: dict,
     *,
     user_agent: str | None = None,
     viewport: dict[str, int] | None = None,
+    on_cookies_refresh=None,
 ) -> tuple[list[SourceCollectorResult], bool]:
     """Run ``scan_source`` for each source sequentially.
 
@@ -399,6 +420,11 @@ async def _scan_enabled_sources(
     ``FBAccountService.ensure_fingerprint`` — pinned per-account by the
     orchestrator so every source scan within this run presents the
     exact same fingerprint to FB.
+
+    ``on_cookies_refresh`` (Phase I-B-3) is an async callback invoked
+    per source after a successful scan with the captured cookie dict;
+    the orchestrator uses it to silently persist any cookies FB rotated
+    mid-session so the stored blob stays in lockstep with reality.
     """
     results: list[SourceCollectorResult] = []
     for src in sources:
@@ -415,6 +441,8 @@ async def _scan_enabled_sources(
                 scan_kwargs["user_agent"] = user_agent
             if viewport:
                 scan_kwargs["viewport"] = viewport
+            if on_cookies_refresh is not None:
+                scan_kwargs["on_cookies_refresh"] = on_cookies_refresh
             result = await scan_source(source_dict, cookies, **scan_kwargs)
         except CookieExpiredError as exc:
             logger.warning(
@@ -493,7 +521,11 @@ def _run_scan_all_sources(db: Session) -> dict[str, Any]:
 
     results, cookie_expired = asyncio.run(
         _scan_enabled_sources(
-            sources, cookies, user_agent=pinned_ua, viewport=pinned_viewport,
+            sources,
+            cookies,
+            user_agent=pinned_ua,
+            viewport=pinned_viewport,
+            on_cookies_refresh=_make_cookie_refresh_callback(db, account.id),
         )
     )
 

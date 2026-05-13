@@ -42,12 +42,16 @@ import asyncio
 import logging
 import random
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Any, Awaitable, Callable, Final
 
 from playwright.async_api import async_playwright
 
 from bot.modules.fb_auth_probe import is_login_wall, login_wall_reason
-from bot.modules.fb_session import DEFAULT_USER_AGENT, create_session_context
+from bot.modules.fb_session import (
+    DEFAULT_USER_AGENT,
+    capture_cookies_from_context,
+    create_session_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +277,9 @@ async def scan_source(
     user_agent: str = DEFAULT_USER_AGENT,
     viewport: dict[str, int] | None = None,
     max_posts: int = 40,
+    on_cookies_refresh: Callable[
+        [dict[str, str]], Awaitable[None]
+    ] | None = None,
 ) -> SourceCollectorResult:
     """Scrape one source and return its posts.
 
@@ -358,6 +365,19 @@ async def scan_source(
 
                 delay = random.uniform(_SCROLL_DELAY_MIN, _SCROLL_DELAY_MAX)
                 await asyncio.sleep(delay)
+
+            # Phase I-B-3 — harvest any rotated cookies before context
+            # closes. Best-effort: swallow callback / capture exceptions
+            # so they don't mask the scan result.
+            if on_cookies_refresh is not None:
+                try:
+                    fresh = await capture_cookies_from_context(context)
+                    if fresh:
+                        await on_cookies_refresh(fresh)
+                except Exception:  # noqa: BLE001 — best-effort harvest
+                    logger.debug(
+                        "cookie refresh callback failed", exc_info=True
+                    )
 
     except CookieExpiredError:
         raise

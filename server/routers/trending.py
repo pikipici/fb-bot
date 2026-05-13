@@ -420,10 +420,17 @@ async def send_post_comment(
     # FB sees a stable device for this session cookie.
     from server.services.fb_account_service import FBAccountService
 
-    pinned_ua, pinned_w, pinned_h = FBAccountService(db).ensure_fingerprint(
-        account.id
-    )
+    fp_svc = FBAccountService(db)
+    pinned_ua, pinned_w, pinned_h = fp_svc.ensure_fingerprint(account.id)
     pinned_viewport = {"width": pinned_w, "height": pinned_h}
+
+    # Phase I-B-3 — capture rotated cookies after the send succeeds and
+    # persist them back silently so the next tick uses FB's newest session
+    # blob (FB rotates ``xs`` mid-session).
+    async def _refresh_cookies(new_cookies: dict[str, str]) -> None:
+        FBAccountService(db).refresh_cookies_silent(
+            account.id, cookies=new_cookies
+        )
 
     # Actually post to Facebook via Playwright.
     try:
@@ -434,6 +441,7 @@ async def send_post_comment(
             display_name=display_name,
             user_agent=pinned_ua,
             viewport=pinned_viewport,
+            on_cookies_refresh=_refresh_cookies,
         )
     except CookieExpiredError as exc:
         logger.warning(
