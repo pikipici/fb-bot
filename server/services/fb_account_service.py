@@ -370,3 +370,39 @@ class FBAccountService:
         account.failure_count = 0
         self.db.commit()
         return True
+
+    def ensure_fingerprint(self, account_id: int) -> tuple[str, int, int]:
+        """Return the pinned ``(browser_ua, viewport_w, viewport_h)`` tuple.
+
+        Phase I-A-2 — if any of the three fields is NULL (freshly migrated
+        account or legacy row), pick a replacement from
+        :mod:`bot.modules.fingerprint_pool` and persist before returning.
+        Idempotent on subsequent calls: same tuple in, same tuple out.
+
+        Raises ``ValueError`` if the account does not exist — callers should
+        not reach this helper with an invalid id (scan/send paths have
+        already fetched the account), so missing == bug.
+        """
+        # Import locally to avoid pulling bot modules into the import graph
+        # of server code at startup (bot.modules uses playwright / heavy deps).
+        from bot.modules.fingerprint_pool import pick_ua, pick_viewport
+
+        account = self.get_account(account_id)
+        if account is None:
+            raise ValueError(f"FBAccount {account_id} not found")
+
+        dirty = False
+        if not account.browser_ua:
+            account.browser_ua = pick_ua()
+            dirty = True
+        if not account.viewport_w or not account.viewport_h:
+            w, h = pick_viewport()
+            account.viewport_w = w
+            account.viewport_h = h
+            dirty = True
+
+        if dirty:
+            self.db.commit()
+            self.db.refresh(account)
+
+        return account.browser_ua, account.viewport_w, account.viewport_h
