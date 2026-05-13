@@ -39,6 +39,37 @@ DEFAULT_USER_AGENT: Final = (
     "Chrome/131.0.0.0 Safari/537.36"
 )
 
+# Phase I-E-1 — stealth init script injected into every BrowserContext via
+# ``context.add_init_script`` before the first navigation. Purpose: hide the
+# three cheapest/highest-signal tells that separate headless Chromium from
+# real Chrome, which Facebook's anti-bot reads on every page load:
+#
+#   * ``navigator.webdriver`` — ``true`` under Playwright by default; real
+#     Chrome always reports ``false``.
+#   * ``navigator.plugins.length`` — ``0`` under headless; real Chrome has
+#     at least the built-in PDF viewer plugins.
+#   * ``navigator.languages`` — we set ``locale=id-ID`` on the context, so
+#     ``languages`` must lead with the Indonesian tag to match.
+#   * ``window.chrome`` — undefined under headless; real Chrome always has
+#     it populated. A minimal shim is enough for feature-detects.
+#
+# Keep the patch intentionally minimal — full playwright-stealth is parked
+# in the roadmap (§6) pending evidence I-E alone is insufficient.
+STEALTH_INIT_SCRIPT: Final = """
+Object.defineProperty(navigator, 'webdriver', { get: () => false });
+Object.defineProperty(navigator, 'plugins', {
+  get: () => [
+    { name: 'Chrome PDF Plugin' },
+    { name: 'Chrome PDF Viewer' },
+    { name: 'Native Client' },
+  ],
+});
+Object.defineProperty(navigator, 'languages', {
+  get: () => ['id-ID', 'id', 'en-US', 'en'],
+});
+window.chrome = window.chrome || { runtime: {} };
+""".strip()
+
 # A handful of realistic desktop viewports. Pick one per session to add
 # a bit of fingerprint variance without venturing into mobile layouts.
 _VIEWPORT_PRESETS: Final = (
@@ -111,6 +142,11 @@ async def create_session_context(
         locale=locale,
         timezone_id=timezone_id,
     )
+    # Phase I-E-1 — register stealth patch BEFORE injecting cookies and
+    # BEFORE the first navigation. ``add_init_script`` attaches to every
+    # future page in this context, so every request FB sees (incl. the
+    # initial document load) evaluates against the patched navigator.
+    await context.add_init_script(STEALTH_INIT_SCRIPT)
     await context.add_cookies(cookies_dict_to_playwright_format(cookies))
     return context
 
