@@ -371,6 +371,40 @@ class FBAccountService:
         self.db.commit()
         return True
 
+    def refresh_cookies_silent(
+        self, account_id: int, *, cookies: dict[str, str]
+    ) -> bool:
+        """Persist a rotated cookie dict without touching status/profile.
+
+        Phase I-B-2 — paired with ``capture_cookies_from_context``. Called
+        from the scanner/sender happy path after we've already succeeded,
+        to write back any rotated session cookies (``xs`` in particular)
+        FB handed us during the interaction.
+
+        Intentionally narrow:
+        - Must include ``c_user`` — session anchor, partial captures
+          without it are rejected as transient read errors.
+        - Does NOT modify ``status``, ``fb_user_id``, ``fb_name``,
+          ``fb_profile_pic_url``, ``failure_count``, or
+          ``cookies_expired_at``. If the account was EXPIRED or BLOCKED,
+          it stays that way — only the admin-driven ``replace_cookies``
+          flow is allowed to flip status back to ACTIVE.
+        - Best-effort: returns ``True`` on write, ``False`` on reject or
+          unknown account. Never raises; callers invoke this from a
+          ``finally`` block and must not mask the real exception.
+        """
+        if not cookies or "c_user" not in cookies:
+            return False
+        account = self.get_account(account_id)
+        if account is None:
+            return False
+
+        from server.crypto import encrypt_cookies
+
+        account.cookies_encrypted = encrypt_cookies(cookies)
+        self.db.commit()
+        return True
+
     def ensure_fingerprint(self, account_id: int) -> tuple[str, int, int]:
         """Return the pinned ``(browser_ua, viewport_w, viewport_h)`` tuple.
 
