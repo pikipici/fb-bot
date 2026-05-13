@@ -14,6 +14,22 @@ from bot.modules.source_collector import (
 from server.models import Base, FBAccount, Source
 
 
+@pytest.fixture(autouse=True)
+def _no_scanner_sleep(monkeypatch):
+    """Make Phase I-D cadence sleeps no-ops so the suite stays fast.
+
+    Individual tests that want to assert ordering of
+    ``_sleep_startup_jitter`` / ``_sleep_inter_source`` simply
+    monkeypatch them again with their own side-effect-tracking stub —
+    the latest ``monkeypatch.setattr`` wins within the test scope.
+    """
+    async def _noop(*_args, **_kwargs) -> None:
+        return None
+
+    monkeypatch.setattr("bot.tasks._sleep_startup_jitter", _noop)
+    monkeypatch.setattr("bot.tasks._sleep_inter_source", _noop)
+
+
 @pytest.fixture
 def db(tmp_path, monkeypatch):
     monkeypatch.setenv(
