@@ -273,3 +273,90 @@ class TestScanSource:
         kwargs = mocks["browser"].new_context.await_args.kwargs
         assert kwargs["user_agent"] == "UA-PIN"
         assert kwargs["viewport"] == {"width": 1440, "height": 900}
+
+    async def test_on_cookies_refresh_invoked_with_captured_cookies(
+        self, mock_playwright_stack
+    ):
+        """Phase I-B-3 — on success, harvest rotated cookies and pass to callback.
+
+        FB rotates ``xs`` mid-session. Scanner must capture the current
+        cookie state from the BrowserContext right before the context
+        closes, so the caller (orchestrator) can persist it back to the
+        DB via ``FBAccountService.refresh_cookies_silent``.
+        """
+        mocks = mock_playwright_stack
+        # Fake FB rotating xs during the session.
+        mocks["context"].cookies = AsyncMock(
+            return_value=[
+                {"name": "c_user", "value": "1", "domain": ".facebook.com"},
+                {"name": "xs", "value": "ROTATED", "domain": ".facebook.com"},
+            ]
+        )
+
+        seen: dict[str, str] = {}
+
+        async def _on_refresh(new_cookies):
+            seen.update(new_cookies)
+
+        src = {"id": 1, "type": "home_feed"}
+        with patch(
+            "bot.modules.source_collector.async_playwright",
+            mocks["async_playwright"],
+        ):
+            result = await scan_source(
+                src, {"c_user": "1"}, on_cookies_refresh=_on_refresh
+            )
+
+        assert result.success is True
+        assert seen == {"c_user": "1", "xs": "ROTATED"}
+
+    async def test_on_cookies_refresh_skipped_on_cookie_expired(
+        self, mock_playwright_stack
+    ):
+        """Don't persist captured cookies when session was invalid anyway."""
+        mocks = mock_playwright_stack
+        mocks["page"].url = "https://www.facebook.com/login/"
+
+        called = False
+
+        async def _on_refresh(_):
+            nonlocal called
+            called = True
+
+        src = {"id": 1, "type": "home_feed"}
+        with patch(
+            "bot.modules.source_collector.async_playwright",
+            mocks["async_playwright"],
+        ):
+            with pytest.raises(CookieExpiredError):
+                await scan_source(
+                    src, {"c_user": "1"}, on_cookies_refresh=_on_refresh
+                )
+
+        assert called is False
+
+    async def test_on_cookies_refresh_tolerates_callback_exception(
+        self, mock_playwright_stack
+    ):
+        """Callback crash must not fail the scan — refresh is best-effort."""
+        mocks = mock_playwright_stack
+        mocks["context"].cookies = AsyncMock(
+            return_value=[
+                {"name": "c_user", "value": "1", "domain": ".facebook.com"},
+            ]
+        )
+
+        async def _on_refresh(_):
+            raise RuntimeError("db write blew up")
+
+        src = {"id": 1, "type": "home_feed"}
+        with patch(
+            "bot.modules.source_collector.async_playwright",
+            mocks["async_playwright"],
+        ):
+            result = await scan_source(
+                src, {"c_user": "1"}, on_cookies_refresh=_on_refresh
+            )
+
+        # Scan itself still reports success — the harvest is opportunistic.
+        assert result.success is True

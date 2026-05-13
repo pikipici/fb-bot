@@ -255,3 +255,42 @@ class TestScanAllSourcesLogic:
         for call in scan_mock.await_args_list:
             assert call.kwargs.get("user_agent") == pinned_ua
             assert call.kwargs.get("viewport") == pinned_vp
+
+    def test_wires_cookie_rotation_callback_into_scan_source(
+        self, db, account_with_cookies, sources, monkeypatch
+    ):
+        """Phase I-B-3 — orchestrator passes ``on_cookies_refresh`` callback
+        that writes captured (rotated) cookies back to DB silently.
+
+        When scan_source fires the callback with a fresh cookie dict, the
+        account's encrypted cookie blob must be replaced; status / profile
+        remain untouched.
+        """
+        from bot.tasks import _run_scan_all_sources
+        from server.crypto import decrypt_cookies
+
+        seen_refresh_cbs: list = []
+
+        async def _fake_scan(source, cookies, **kwargs):
+            cb = kwargs.get("on_cookies_refresh")
+            assert cb is not None, "orchestrator must pass on_cookies_refresh"
+            seen_refresh_cbs.append(cb)
+            # Simulate FB rotating xs.
+            await cb({"c_user": cookies["c_user"], "xs": "ROTATED"})
+            return _mock_result(int(source["id"]))
+
+        monkeypatch.setattr(
+            "bot.tasks.scan_source", AsyncMock(side_effect=_fake_scan)
+        )
+
+        original_status = account_with_cookies.status
+        _run_scan_all_sources(db)
+        db.refresh(account_with_cookies)
+
+        # Callback was invoked per source.
+        assert len(seen_refresh_cbs) >= 2
+        # Cookie got rotated into DB.
+        fresh = decrypt_cookies(account_with_cookies.cookies_encrypted or "")
+        assert fresh.get("xs") == "ROTATED"
+        # Status untouched.
+        assert account_with_cookies.status == original_status
