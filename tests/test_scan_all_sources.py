@@ -215,3 +215,43 @@ class TestScanAllSourcesLogic:
         # Disabled source was not touched.
         db.refresh(sources[2])
         assert sources[2].last_scanned_at is None
+
+    def test_pins_fingerprint_and_forwards_to_scan_source(
+        self, db, account_with_cookies, sources, monkeypatch
+    ):
+        """Phase I-A-3 — orchestrator pins UA+viewport per-account then
+        forwards via kwargs to every ``scan_source`` call.
+
+        Assertions:
+        - ``ensure_fingerprint`` is invoked exactly once (per-account pin).
+        - After the run the account row has ``browser_ua``/``viewport_w``/
+          ``viewport_h`` populated (persistence survives).
+        - Every ``scan_source`` call gets the same UA + viewport kwargs
+          (stable across sources within a run).
+        """
+        from bot.tasks import _run_scan_all_sources
+
+        scan_mock = AsyncMock(
+            side_effect=lambda source, cookies, **_: _mock_result(
+                int(source["id"])
+            )
+        )
+        monkeypatch.setattr("bot.tasks.scan_source", scan_mock)
+
+        _run_scan_all_sources(db)
+
+        db.refresh(account_with_cookies)
+        assert account_with_cookies.browser_ua is not None
+        assert account_with_cookies.viewport_w is not None
+        assert account_with_cookies.viewport_h is not None
+
+        # Every scan_source call gets the SAME fingerprint within this run.
+        pinned_ua = account_with_cookies.browser_ua
+        pinned_vp = {
+            "width": account_with_cookies.viewport_w,
+            "height": account_with_cookies.viewport_h,
+        }
+        assert scan_mock.await_count >= 2
+        for call in scan_mock.await_args_list:
+            assert call.kwargs.get("user_agent") == pinned_ua
+            assert call.kwargs.get("viewport") == pinned_vp

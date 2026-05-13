@@ -246,3 +246,30 @@ class TestScanSource:
         assert result.success is False
         assert "boom" in result.error
         mocks["browser"].close.assert_awaited()
+
+    async def test_viewport_kwarg_forwarded_to_new_context(
+        self, mock_playwright_stack
+    ):
+        """Phase I-A-3 — pinned viewport must reach browser.new_context.
+
+        Caller (orchestrator) passes ``viewport={"width", "height"}`` from
+        ``FBAccountService.ensure_fingerprint``. Without this, every scan
+        re-rolls a viewport and FB sees fingerprint drift.
+        """
+        mocks = mock_playwright_stack
+        src = {"id": 1, "type": "home_feed"}
+
+        with patch(
+            "bot.modules.source_collector.async_playwright",
+            mocks["async_playwright"],
+        ):
+            await scan_source(
+                src,
+                {"c_user": "1"},
+                user_agent="UA-PIN",
+                viewport={"width": 1440, "height": 900},
+            )
+
+        kwargs = mocks["browser"].new_context.await_args.kwargs
+        assert kwargs["user_agent"] == "UA-PIN"
+        assert kwargs["viewport"] == {"width": 1440, "height": 900}
