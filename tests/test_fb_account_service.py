@@ -266,3 +266,61 @@ class TestToDict:
         d = svc.to_dict(account, include_email=True)
         assert d["email"] == "a@fb.com"
         assert "password" not in d  # Never expose password
+
+
+class TestEnsureFingerprint:
+    """Phase I-A-2 — per-account UA + viewport pinning.
+
+    ``ensure_fingerprint`` is the idempotent accessor called from the bot
+    code (scan/send) before building a Playwright context. If the account
+    has no pinned UA/viewport yet, we pick one from the pool and persist.
+    On subsequent calls the same values are returned — key property, because
+    rotating fingerprint is exactly the anti-pattern we're fixing.
+    """
+
+    def test_assigns_when_all_null(self, svc):
+        account = svc.create_account("Fresh", "f@fb.com", "p")
+        ua, w, h = svc.ensure_fingerprint(account.id)
+        assert isinstance(ua, str) and ua.startswith("Mozilla/5.0")
+        assert isinstance(w, int) and w >= 1000
+        assert isinstance(h, int) and h >= 600
+
+        refreshed = svc.get_account(account.id)
+        assert refreshed.browser_ua == ua
+        assert refreshed.viewport_w == w
+        assert refreshed.viewport_h == h
+
+    def test_idempotent_when_already_set(self, svc):
+        account = svc.create_account("Pinned", "p@fb.com", "p")
+        account.browser_ua = "UA-PINNED"
+        account.viewport_w = 1366
+        account.viewport_h = 768
+        svc.db.commit()
+
+        for _ in range(3):
+            ua, w, h = svc.ensure_fingerprint(account.id)
+            assert (ua, w, h) == ("UA-PINNED", 1366, 768)
+
+        refreshed = svc.get_account(account.id)
+        assert refreshed.browser_ua == "UA-PINNED"
+        assert refreshed.viewport_w == 1366
+        assert refreshed.viewport_h == 768
+
+    def test_raises_on_missing_account(self, svc):
+        with pytest.raises(ValueError, match="not found"):
+            svc.ensure_fingerprint(99999)
+
+    def test_partial_null_still_gets_full_tuple(self, svc):
+        """Only UA set (viewport null) -> picks new viewport, keeps existing UA."""
+        account = svc.create_account("Half", "h@fb.com", "p")
+        account.browser_ua = "UA-HALF"
+        svc.db.commit()
+
+        ua, w, h = svc.ensure_fingerprint(account.id)
+        assert ua == "UA-HALF"
+        assert w and h
+
+        refreshed = svc.get_account(account.id)
+        assert refreshed.browser_ua == "UA-HALF"
+        assert refreshed.viewport_w == w
+        assert refreshed.viewport_h == h
