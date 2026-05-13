@@ -113,3 +113,39 @@ async def create_session_context(
     )
     await context.add_cookies(cookies_dict_to_playwright_format(cookies))
     return context
+
+
+async def capture_cookies_from_context(
+    context: Any, *, domain_suffix: str = "facebook.com"
+) -> dict[str, str]:
+    """Harvest the current cookie state from a live BrowserContext.
+
+    Phase I-B-1 — FB rotates session cookies (``xs`` in particular) mid-
+    session via ``Set-Cookie`` headers. If we only ever write the cookie
+    dict we started with, the DB row drifts away from what the browser
+    actually used, and the next scanner tick ends up presenting the
+    pre-rotation value — which FB treats as a stale session.
+
+    Call this after a successful interaction (scan/send) and before the
+    context closes. Returns a flat ``{name: value}`` dict filtered to
+    cookies whose ``domain`` ends in ``domain_suffix`` — this catches both
+    leading-dot (``.facebook.com``) and bare-subdomain forms
+    (``m.facebook.com`` / ``www.facebook.com``).
+
+    Tolerates ``cookies()`` returning ``None`` or empty lists — returns
+    ``{}`` rather than raising, because this helper runs inside a
+    ``finally`` block and must never mask the real exception.
+    """
+    raw = await context.cookies()
+    if not raw:
+        return {}
+    out: dict[str, str] = {}
+    for c in raw:
+        domain = (c.get("domain") or "").lower()
+        if not domain.endswith(domain_suffix):
+            continue
+        name = c.get("name")
+        if not name:
+            continue
+        out[name] = c.get("value", "")
+    return out
