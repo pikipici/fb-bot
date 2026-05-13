@@ -327,7 +327,31 @@ git commit -m "feat(i-a): wire per-account UA+viewport into playwright context"
 `Set-Cookie`. Kita capture balik dari `context.cookies()` setelah session sukses,
 replace yang kesimpen di DB. Ini yang bikin cookie "hidup terus".
 
-#### I-B-1 Helper `capture_cookies_from_context(context) → dict`
+#### I-B-1 Helper `capture_cookies_from_context(context) → dict` `[x]` `240e7da`
+
+Shipped 2026-05-13. `bot/modules/fb_session.py` append helper yang filter cookie
+domain ending `facebook.com` (catch leading-dot + bare subdomain) + tolerant ke
+None/empty return. 5 test pass. Commits: RED `9a6d214`, GREEN `240e7da`.
+
+#### I-B-2 Service method `refresh_cookies_silent(account_id, cookies)` `[x]` `86ec6b8`
+
+Shipped 2026-05-13. `FBAccountService.refresh_cookies_silent` overwrites only
+`cookies_encrypted`, rejects empty dict + missing `c_user`, never raises on
+missing account. Paired stub fixture buat `encrypt_cookies`/`decrypt_cookies`.
+6 test pass. Commits: RED `def6f42`, GREEN `86ec6b8`.
+
+#### I-B-3 Wire capture di scanner + sender `[x]` `8b36028`
+
+Shipped 2026-05-13. `scan_source` + `send_comment` accept
+`on_cookies_refresh: Callable[[dict], Awaitable[None]] | None`, harvest via
+`capture_cookies_from_context` right before context close, swallow callback
+exceptions (best-effort). `_run_scan_all_sources` builds callback via
+`_make_cookie_refresh_callback(db, account_id)`, trending `/comment` router
+passes inline closure. 4 test (3 scanner + 1 orchestrator). Full suite **666
+passed** (+15 since I-A). Deploy: `sudo systemctl restart fb-bot-api
+fb-bot-worker fb-bot-beat` active, smoke via SessionLocal: `refresh_cookies_silent`
+rotated `xs` → DB updated, status untouched, restore to original clean.
+Commits: RED `8a02024`, GREEN `8b36028`.
 
 **Files:**
 - Modify: `bot/modules/fb_session.py` (append helper)
