@@ -60,6 +60,7 @@ class TestCreateSessionContext:
 
         mock_context = MagicMock()
         mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
         mock_browser = MagicMock()
         mock_browser.new_context = AsyncMock(return_value=mock_context)
 
@@ -80,6 +81,7 @@ class TestCreateSessionContext:
     async def test_uses_default_user_agent_when_none_given(self):
         mock_context = MagicMock()
         mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
         mock_browser = MagicMock()
         mock_browser.new_context = AsyncMock(return_value=mock_context)
 
@@ -91,6 +93,7 @@ class TestCreateSessionContext:
     async def test_accepts_custom_user_agent(self):
         mock_context = MagicMock()
         mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
         mock_browser = MagicMock()
         mock_browser.new_context = AsyncMock(return_value=mock_context)
 
@@ -105,6 +108,7 @@ class TestCreateSessionContext:
     async def test_sets_realistic_viewport(self):
         mock_context = MagicMock()
         mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
         mock_browser = MagicMock()
         mock_browser.new_context = AsyncMock(return_value=mock_context)
 
@@ -122,6 +126,7 @@ class TestCreateSessionContext:
         """Empty dict is allowed — caller checks cookie validity separately."""
         mock_context = MagicMock()
         mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
         mock_browser = MagicMock()
         mock_browser.new_context = AsyncMock(return_value=mock_context)
 
@@ -135,6 +140,7 @@ class TestCreateSessionContext:
         """Indonesia locale + timezone so FB doesn't flag the session."""
         mock_context = MagicMock()
         mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
         mock_browser = MagicMock()
         mock_browser.new_context = AsyncMock(return_value=mock_context)
 
