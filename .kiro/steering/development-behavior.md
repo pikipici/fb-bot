@@ -69,6 +69,35 @@ Panduan behavior pengembangan project ini. Dibaca oleh AI assistant sebelum mula
 - Keep hanya 8 entry terbaru, hapus yang paling lama.
 - Kalau sesuatu belum di-deploy, tulis jelas `local only` / `not deployed yet`.
 
+## Current Next Step
+
+> Mutable pointer — ganti tiap kali next decision geser. Activity log di
+> bawah tetap immutable history.
+
+**Last shipped:** Phase I-D scanner cadence humanization (2026-05-13,
+HEAD `8479697`). Full suite 671 pass, services live.
+
+**Phase I progress:**
+- ✅ I-A Per-account fingerprint pinning
+- ✅ I-B Cookie rotation capture
+- ⏸️ I-C Persistent browser profile — parked, tunggu observation data dulu
+- ✅ I-D Scanner cadence (interval + jitter + think-time)
+- ⏳ I-E Stealth patch (`navigator.webdriver=false` + plugins/languages)
+
+**Pending decision — 4 opsi next:**
+
+1. **Gas I-E sekarang** — cheap stealth patch via `context.add_init_script()`,
+   zero infra change, stacking rollout w/ I-A+I-B+I-D. ~30 menit. **[REKOMENDASI GUE]**
+2. **Stop observe 24-48 jam** — biarin I-A+I-B+I-D combined effect terukur dulu
+   di akun live sebelum putusin apakah perlu I-E atau I-C.
+3. **Re-upload cookie akun id=1** (status=EXPIRED sekarang) → baru benefit
+   Phase I kerasa. Bisa langsung liat apakah cookie lifetime beneran lebih panjang.
+4. **Gas I-C** — skip observation, persistent profile sekarang. Lebih invasive
+   (DB column + path mgmt + refactor launch pattern). ~45-60 menit.
+
+**Alasan rekomendasi opsi 1:** murah, risk rendah, bisa jalan paralel sama
+observation (decision 2). I-C mending tunggu data dulu sesuai plan §5.
+
 ## Activity Log
 
 | Tanggal | Status | Summary |
