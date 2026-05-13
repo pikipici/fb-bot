@@ -189,6 +189,14 @@ class FBAccount(Base):
     cookies_expired_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Phase I-A — pinned browser fingerprint per-account.
+    # Null untuk akun lama (pre-Phase-I) / akun yang belum pernah dipake;
+    # di-assign lazily oleh FBAccountService.ensure_fingerprint saat pertama
+    # scan/send. Stable across runs supaya FB anti-bot ngeliat device
+    # konsisten (bukan "browser baru tiap 15 menit").
+    browser_ua: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    viewport_w: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    viewport_h: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
 
 class Source(Base):
