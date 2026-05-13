@@ -46,7 +46,7 @@ def _collect_interval() -> int:
 
 
 def _scan_interval() -> int:
-    return int(os.getenv("SCAN_INTERVAL_SECONDS", "900"))  # 15 min default
+    return int(os.getenv("SCAN_INTERVAL_SECONDS", "1800"))  # 30 min default (Phase I-D)
 
 
 def _health_interval() -> int:

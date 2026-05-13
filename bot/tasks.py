@@ -401,6 +401,44 @@ def _make_cookie_refresh_callback(db: Session, account_id: int):
     return _refresh
 
 
+# Phase I-D — Scanner cadence humanization.
+#
+# FB anti-bot flags rapid, on-the-second auth rhythms coming from a single
+# IP (VPS). Two knobs soften that signal:
+#
+# * ``_sleep_startup_jitter`` — 0..``_STARTUP_JITTER_MAX_SECONDS`` random
+#   delay at the very start of a scan cycle so beat ticks don't all land
+#   on the same wall-clock boundary across days.
+# * ``_sleep_inter_source`` — 30..90s "think-time" BETWEEN sources in a
+#   cycle. Mimics a human idling before clicking the next feed.
+#
+# Both are broken out as module-level coroutines (not inlined) so tests
+# can monkeypatch them out for fast, deterministic runs.
+_STARTUP_JITTER_MAX_SECONDS: float = 120.0
+_INTER_SOURCE_DELAY_MIN_SECONDS: float = 30.0
+_INTER_SOURCE_DELAY_MAX_SECONDS: float = 90.0
+
+
+async def _sleep_startup_jitter() -> None:
+    """Sleep a random 0..2-minute startup jitter."""
+    import random
+
+    delay = random.uniform(0.0, _STARTUP_JITTER_MAX_SECONDS)
+    logger.info("scan_all_sources startup jitter: %.1fs", delay)
+    await asyncio.sleep(delay)
+
+
+async def _sleep_inter_source() -> None:
+    """Sleep a random 30..90s "think-time" between sources."""
+    import random
+
+    delay = random.uniform(
+        _INTER_SOURCE_DELAY_MIN_SECONDS, _INTER_SOURCE_DELAY_MAX_SECONDS
+    )
+    logger.info("scan_all_sources inter-source think-time: %.1fs", delay)
+    await asyncio.sleep(delay)
+
+
 async def _scan_enabled_sources(
     sources: list,
     cookies: dict,
@@ -427,7 +465,10 @@ async def _scan_enabled_sources(
     mid-session so the stored blob stays in lockstep with reality.
     """
     results: list[SourceCollectorResult] = []
-    for src in sources:
+    await _sleep_startup_jitter()
+    for idx, src in enumerate(sources):
+        if idx > 0:
+            await _sleep_inter_source()
         source_dict = {
             "id": src.id,
             "type": src.type,
