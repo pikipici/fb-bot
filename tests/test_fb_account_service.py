@@ -53,6 +53,19 @@ class TestCreateAccount:
         account = svc.create_account("Noted", "n@fb.com", "p", notes="backup account")
         assert account.notes == "backup account"
 
+    def test_create_fingerprint_fields_default_null(self, svc):
+        """New account must start with no pinned fingerprint.
+
+        Phase I-A-1 — fields ``browser_ua``, ``viewport_w``, ``viewport_h``
+        are assigned lazily by ``ensure_fingerprint`` on first use. Creation
+        path leaves them NULL so existing rows (migrated in prod) and newly
+        created rows behave identically.
+        """
+        account = svc.create_account("Fresh", "f@fb.com", "p")
+        assert account.browser_ua is None
+        assert account.viewport_w is None
+        assert account.viewport_h is None
+
 
 class TestGetAccount:
     def test_get_existing(self, svc):

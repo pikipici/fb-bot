@@ -63,7 +63,7 @@ ngeliat "device ini konsisten". Random cuma pas akun diciptakan, habis itu pin.
 
 **Files:**
 - Modify: `server/models.py:154-191` (FBAccount class)
-- Create: `server/migrations/003_fb_fingerprint.py` (ikut pattern migration existing — cek `search_files("*.py", path="server/migrations/")` dulu)
+- Create: `alembic/versions/005_fb_fingerprint.py` (next rev after `004_scanner_runs`)
 - Test: `tests/test_fb_account_service.py` (verif default null OK)
 
 **Step 1: Append fields di FBAccount**
@@ -77,21 +77,34 @@ viewport_w: Mapped[int | None] = mapped_column(Integer, nullable=True)
 viewport_h: Mapped[int | None] = mapped_column(Integer, nullable=True)
 ```
 
-**Step 2: Migration (Alembic atau raw SQL — ikut yang udah ada)**
+**Step 2: Migration Alembic**
 
 ```python
-# server/migrations/003_fb_fingerprint.py
+# alembic/versions/005_fb_fingerprint.py
 """Add browser fingerprint fields to fb_accounts."""
-from sqlalchemy import text
+from __future__ import annotations
+from typing import Sequence, Union
+import sqlalchemy as sa
+from alembic import op
 
-def upgrade(conn):
-    conn.execute(text("ALTER TABLE fb_accounts ADD COLUMN browser_ua VARCHAR(300)"))
-    conn.execute(text("ALTER TABLE fb_accounts ADD COLUMN viewport_w INTEGER"))
-    conn.execute(text("ALTER TABLE fb_accounts ADD COLUMN viewport_h INTEGER"))
+revision: str = "005"
+down_revision: Union[str, None] = "004"
+branch_labels: Union[str, Sequence[str], None] = None
+depends_on: Union[str, Sequence[str], None] = None
 
-def downgrade(conn):
-    # SQLite gak support DROP COLUMN native; kalau harus rollback, copy-table.
-    pass
+
+def upgrade() -> None:
+    with op.batch_alter_table("fb_accounts") as batch_op:
+        batch_op.add_column(sa.Column("browser_ua", sa.String(length=300), nullable=True))
+        batch_op.add_column(sa.Column("viewport_w", sa.Integer(), nullable=True))
+        batch_op.add_column(sa.Column("viewport_h", sa.Integer(), nullable=True))
+
+
+def downgrade() -> None:
+    with op.batch_alter_table("fb_accounts") as batch_op:
+        batch_op.drop_column("viewport_h")
+        batch_op.drop_column("viewport_w")
+        batch_op.drop_column("browser_ua")
 ```
 
 **Step 3: Run test create/read default null**
