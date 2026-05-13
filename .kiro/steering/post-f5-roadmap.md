@@ -551,9 +551,12 @@ Urutan berdasarkan value:user-effort. Pilih satu untuk sprint berikutnya, sisany
 
 ### 3.6 H-F: Session Rotation & Browser Fingerprint Hardening
 
-**Value:** Anti-detection. Sekarang Playwright pake default fingerprint setiap run.
-
-**Scope:** persist browser context per-akun, rotate user-agent + viewport (reasonable pool), persist localStorage. Incremental — tidak perlu dalam 1 sprint besar.
+**Status:** SUPERSEDED — di-promote jadi **Phase I (Session Hardening)**.
+Plan detail ada di `.kiro/steering/phase-i-session-hardening.md`.
+Ringkas: per-akun UA/viewport pinning (I-A), cookie rotation capture (I-B),
+persistent Playwright profile via `launch_persistent_context` (I-C), scan
+interval tuning + jitter (I-D), stealth `navigator.webdriver` patch (I-E).
+Trigger: user lapor cookie cepat expired (2026-05-13).
 
 ---
 
@@ -594,4 +597,8 @@ Kalau lanjut di sesi depan:
 4. Update status task di file ini dengan legend `[x]` setelah commit + deploy OK.
 5. Rollup activity log ke `development-behavior.md` setelah phase kelar, keep top 8.
 
-**Current Next Step:** F7 shipped (HEAD `d976df3`). Pilih salah satu Phase H candidate dari §3 buat sprint berikutnya. Gue rekomendasi H-A (Notification channel).
+**Current Next Step:** Phase I (Session Hardening) — plan ada di
+`.kiro/steering/phase-i-session-hardening.md`. Mulai dari task **I-A-1**
+(add `browser_ua`/`viewport_w`/`viewport_h` columns ke `fb_accounts`).
+Phase H-A (Notification) ditunda sampe Phase I beres — cookie stability
+lebih urgent karena user barusan lapor cepat expired (2026-05-13).
