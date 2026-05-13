@@ -850,7 +850,14 @@ Commit: `docs(i-d): note new scan interval guidance`.
 **Objective:** Patch `navigator.webdriver=false` + hide `HeadlessChrome`
 markers. Cheap win sebelum (potentially) adopt playwright-stealth full.
 
-#### I-E-1 Inject `navigator.webdriver` override via `add_init_script`
+#### I-E-1 Inject `navigator.webdriver` override via `add_init_script` `[x]` `2a00bc7`
+
+Shipped 2026-05-13. `STEALTH_INIT_SCRIPT` di `bot/modules/fb_session.py:42-71`
+patch 4 marker (`navigator.webdriver`, `plugins`, `languages`, `window.chrome`),
+attached via `context.add_init_script(...)` sebelum `add_cookies` (before first
+nav) di `create_session_context`. 6 new test (RED `ed0933e` → GREEN `2a00bc7`
+→ test fixture backfill `948858c`, `f3d2113`). Full suite **677 passed** di
+server. Services active `f3d2113`, smoke: 4 occurrence stealth refs di file.
 
 **Files:**
 - Modify: `bot/modules/fb_session.py` — di `create_persistent_session` sebelum return, panggil `context.add_init_script(...)` w/ patch.
