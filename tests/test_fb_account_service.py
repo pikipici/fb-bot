@@ -324,3 +324,99 @@ class TestEnsureFingerprint:
         assert refreshed.browser_ua == "UA-HALF"
         assert refreshed.viewport_w == w
         assert refreshed.viewport_h == h
+
+
+class TestRefreshCookiesSilent:
+    """Phase I-B-2 — silent cookie refresh after rotation capture.
+
+    Unlike ``replace_cookies`` (used by admin re-upload flow) this method
+    must NOT touch status / fb_name / failure_count / cookies_expired_at.
+    It's called from the scanner/sender happy path to persist rotated
+    cookies that FB handed us mid-session. Touching status would flip
+    EXPIRED → ACTIVE silently on every scan, masking real failures.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _stub_cookie_crypto(self):
+        """Stub ``encrypt_cookies`` / ``decrypt_cookies`` used by the service.
+
+        ``create_cookie_account`` and ``refresh_cookies_silent`` import these
+        helpers locally from ``server.crypto``. Patching at that module level
+        makes the stubs effective for both import sites.
+        """
+        def _fake_enc(d):
+            return "ENC:" + "|".join(f"{k}={v}" for k, v in d.items())
+
+        def _fake_dec(s):
+            body = s.replace("ENC:", "", 1)
+            out: dict[str, str] = {}
+            for piece in body.split("|"):
+                if "=" in piece:
+                    k, _, v = piece.partition("=")
+                    out[k] = v
+            return out
+
+        with patch("server.crypto.encrypt_cookies", side_effect=_fake_enc):
+            with patch(
+                "server.crypto.decrypt_cookies", side_effect=_fake_dec
+            ):
+                yield
+
+    @pytest.fixture
+    def cookie_account(self, svc):
+        acc = svc.create_cookie_account(
+            label="cookie-acc",
+            cookies={"c_user": "10", "xs": "OLD"},
+            fb_user_id="10",
+            fb_name="Foo",
+            fb_profile_pic_url=None,
+        )
+        acc.status = "ACTIVE"
+        acc.failure_count = 0
+        svc.db.commit()
+        return acc
+
+    def test_overwrites_encrypted_cookies(self, svc, cookie_account):
+        svc.refresh_cookies_silent(
+            cookie_account.id, cookies={"c_user": "10", "xs": "NEW"}
+        )
+        fresh = svc.get_cookies(cookie_account.id)
+        assert fresh == {"c_user": "10", "xs": "NEW"}
+
+    def test_does_not_touch_status(self, svc, cookie_account):
+        cookie_account.status = "EXPIRED"
+        svc.db.commit()
+
+        svc.refresh_cookies_silent(
+            cookie_account.id, cookies={"c_user": "10", "xs": "ROT"}
+        )
+        svc.db.refresh(cookie_account)
+        assert cookie_account.status == "EXPIRED"
+
+    def test_does_not_touch_profile_fields(self, svc, cookie_account):
+        svc.refresh_cookies_silent(
+            cookie_account.id, cookies={"c_user": "10", "xs": "ROT"}
+        )
+        svc.db.refresh(cookie_account)
+        assert cookie_account.fb_name == "Foo"
+        assert cookie_account.fb_user_id == "10"
+        assert cookie_account.failure_count == 0
+
+    def test_rejects_empty_dict(self, svc, cookie_account):
+        """Empty capture = transient read error, must NOT nuke the stored cookie."""
+        svc.refresh_cookies_silent(cookie_account.id, cookies={})
+        fresh = svc.get_cookies(cookie_account.id)
+        assert fresh == {"c_user": "10", "xs": "OLD"}
+
+    def test_rejects_missing_c_user(self, svc, cookie_account):
+        """Safety: refuse to persist a partial capture w/o session anchor."""
+        svc.refresh_cookies_silent(
+            cookie_account.id, cookies={"datr": "X"}
+        )
+        fresh = svc.get_cookies(cookie_account.id)
+        assert fresh == {"c_user": "10", "xs": "OLD"}
+
+    def test_no_op_on_missing_account(self, svc):
+        """Silent refresh is best-effort — never raise on unknown id."""
+        svc.refresh_cookies_silent(99999, cookies={"c_user": "1"})
+        assert svc.get_account(99999) is None
