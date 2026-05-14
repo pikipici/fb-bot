@@ -504,3 +504,123 @@ class TestPerCharDelay:
             delay_range_ms=(5, 15),
         )
         assert result.success is True
+
+
+# --- Phase I-C-3 — persistent profile routing -----------------------------
+
+
+@pytest.mark.asyncio
+class TestSendCommentPersistentRouting:
+    """``send_comment`` mirrors scan_source: when both
+    ``FB_USE_PERSISTENT_PROFILE=1`` and ``account_id`` are present, route
+    via :func:`create_persistent_session`. Otherwise fall back to the
+    legacy launch+new_context path. Single env flag enables clean rollback.
+    """
+
+    async def test_persistent_route_when_env_set(
+        self, fake_playwright, fake_context, monkeypatch, tmp_path
+    ):
+        from bot.modules.comment_sender import send_comment
+
+        monkeypatch.setenv("FB_USE_PERSISTENT_PROFILE", "1")
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+
+        seen: dict = {}
+
+        async def _fake_persistent(pw, **kwargs):
+            seen["called"] = True
+            seen["kwargs"] = kwargs
+            return fake_context
+
+        # Make _wait_posted_comment short-circuit to truthy so happy path
+        # completes — actual verify already covered by other suites.
+        import bot.modules.comment_sender as cs
+
+        monkeypatch.setattr(cs, "create_persistent_session", _fake_persistent)
+        monkeypatch.setattr(
+            cs, "_find_composer", AsyncMock(return_value=_make_element())
+        )
+        monkeypatch.setattr(
+            cs, "_find_post_button", AsyncMock(return_value=_make_element())
+        )
+        monkeypatch.setattr(
+            cs,
+            "_wait_posted_comment",
+            AsyncMock(return_value=_make_element()),
+        )
+
+        result = await send_comment(
+            post_url="https://facebook.com/post/1",
+            comment_text="halo",
+            cookies={"c_user": "1"},
+            display_name="Tester",
+            account_id=42,
+        )
+
+        assert seen.get("called") is True
+        assert seen["kwargs"]["account_id"] == 42
+        # Legacy path must not be used when persistent route is taken.
+        assert fake_playwright.chromium.launch.await_count == 0
+        assert result.success is True
+
+    async def test_legacy_route_when_env_unset(
+        self, fake_playwright, monkeypatch
+    ):
+        from bot.modules.comment_sender import send_comment
+
+        monkeypatch.delenv("FB_USE_PERSISTENT_PROFILE", raising=False)
+
+        import bot.modules.comment_sender as cs
+
+        monkeypatch.setattr(
+            cs, "_find_composer", AsyncMock(return_value=_make_element())
+        )
+        monkeypatch.setattr(
+            cs, "_find_post_button", AsyncMock(return_value=_make_element())
+        )
+        monkeypatch.setattr(
+            cs,
+            "_wait_posted_comment",
+            AsyncMock(return_value=_make_element()),
+        )
+
+        await send_comment(
+            post_url="https://facebook.com/post/1",
+            comment_text="halo",
+            cookies={"c_user": "1"},
+            display_name="Tester",
+            account_id=42,  # provided, but env is off
+        )
+
+        assert fake_playwright.chromium.launch.await_count == 1
+
+    async def test_legacy_route_when_account_id_missing(
+        self, fake_playwright, monkeypatch
+    ):
+        from bot.modules.comment_sender import send_comment
+
+        monkeypatch.setenv("FB_USE_PERSISTENT_PROFILE", "1")
+
+        import bot.modules.comment_sender as cs
+
+        monkeypatch.setattr(
+            cs, "_find_composer", AsyncMock(return_value=_make_element())
+        )
+        monkeypatch.setattr(
+            cs, "_find_post_button", AsyncMock(return_value=_make_element())
+        )
+        monkeypatch.setattr(
+            cs,
+            "_wait_posted_comment",
+            AsyncMock(return_value=_make_element()),
+        )
+
+        await send_comment(
+            post_url="https://facebook.com/post/1",
+            comment_text="halo",
+            cookies={"c_user": "1"},
+            display_name="Tester",
+            # account_id intentionally omitted.
+        )
+
+        assert fake_playwright.chromium.launch.await_count == 1
