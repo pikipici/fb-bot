@@ -25,15 +25,15 @@ from __future__ import annotations
 import random
 from typing import Final
 
-# Current-gen Chrome stable (Chrome 131-132 in early 2026). Rotate this list
+# Current-gen Chrome stable (Chrome 146-147 in mid-2026). Rotate this list
 # once a quarter or the UA starts looking dated vs. real browser fleets.
 _UA_POOL: Final[tuple[str, ...]] = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36",
+    "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+    "(KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
 )
 
 # Common desktop viewports. Exclude mobile/portrait to stay on www.facebook.com
