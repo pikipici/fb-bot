@@ -528,10 +528,35 @@ git commit -m "feat(i-b): capture rotated cookies after scan/send and persist"
 
 ### Phase I-C — Persistent Browser Profile
 
-**Objective:** Replace `browser.new_context()` pattern dengan
-`chromium.launch_persistent_context(user_data_dir)` per-akun. Efeknya
-`localStorage`, `IndexedDB`, service worker cache, dan `fb_dtsg` token persist
-across runs → FB ngeliat 1 browser konsisten.
+> **Status:** 🔥 ACTIVE (2026-05-14, unblocked by observation FAIL).
+>
+> **Trigger:** Phase I-A→I-E observation window closed FAIL. Akun id=1 flip
+> EXPIRED ~T+5h post re-upload (2026-05-13 16:06:27 UTC), root cause
+> `login_anchor` di `facebook.com/groups/2160701604115230` page. Cheap stealth
+> (UA pin + cookie rotate + headless patches) gak cukup — FB nge-flag fingerprint
+> di group navigation pageload.
+>
+> **2nd observation Tstart:** 2026-05-14 07:24 UTC (cookie re-uploaded, manual
+> scan id=276 success 2/2 source 4 new posts, akun ACTIVE). Pattern compare:
+> kalau flip EXPIRED <12 UTC = consistent ~5h baseline confirmed. I-C harus ship
+> sebelum cookie flip lagi biar bisa verify mekanisme kerja.
+>
+> **Implementation notes (discovered during planning):**
+> - `launch_persistent_context` cookies behavior: profile dir punya cookie store
+>   sendiri. Kalau panggil `context.add_cookies(...)` first run, FB will treat
+>   incoming cookie + empty localStorage = mismatched device → bigger flag.
+>   **Safer:** first run pake `add_cookies` (bootstrap), persist apa adanya;
+>   subsequent runs cookies udah live di profile, **JANGAN** call `add_cookies`
+>   lagi (decrypt DB → diff vs profile → pick whichever is fresher = nasty bug
+>   risk). Plan §I-C-2 needs 1st-run flag.
+> - Profile dir grows w/ disk usage (cache + service workers ~50-200 MB per
+>   akun). Single-account MVP aman, but wire cleanup on `DELETE` (§I-C-4) wajib
+>   biar gak orphan saat user swap akun.
+> - Re-upload cookie endpoint sekarang **WIPE profile dir** dulu sebelum simpan
+>   cookie baru. Reasoning: profile yang udah taint (login wall flag) gak mungkin
+>   recovery via cookie swap doang. Add to §I-C-3 callers.
+> - All 4 sub-tasks (I-C-1..I-C-4) tetap valid as-written below; tambah I-C-5
+>   "wipe profile on re-upload-cookie" sebagai final wiring task.
 
 #### I-C-1 Disk path helper + cleanup policy
 
