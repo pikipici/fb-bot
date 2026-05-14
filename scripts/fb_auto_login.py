@@ -116,7 +116,27 @@ async def auto_login(
             await page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=TIMEOUT_MS)
             await page.fill("input[name='email']", email, timeout=TIMEOUT_MS)
             await page.fill("input[name='pass']", password, timeout=TIMEOUT_MS)
-            await page.click("button[name='login']", timeout=TIMEOUT_MS)
+            # FB punya beberapa varian button login: button[name='login'] (legacy),
+            # button[type='submit'] (modern m.facebook.com), button[data-testid='royal_login_button'].
+            # Coba urutan fallback.
+            login_clicked = False
+            for selector in (
+                "button[name='login']",
+                "button[data-testid='royal_login_button']",
+                "form button[type='submit']",
+                "button[type='submit']",
+            ):
+                try:
+                    btn = await page.query_selector(selector)
+                    if btn:
+                        await btn.click(timeout=5_000)
+                        login_clicked = True
+                        break
+                except PWTimeout:
+                    continue
+            if not login_clicked:
+                # last resort: submit form via Enter key
+                await page.press("input[name='pass']", "Enter")
 
             try:
                 await page.wait_for_url(
