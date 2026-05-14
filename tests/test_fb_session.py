@@ -10,6 +10,7 @@ from bot.modules.fb_session import (
     STEALTH_INIT_SCRIPT,
     capture_cookies_from_context,
     cookies_dict_to_playwright_format,
+    create_persistent_session,
     create_session_context,
 )
 
@@ -325,3 +326,186 @@ class TestCreateSessionContextInjectsStealth:
         # Both must have been called on the returned context.
         assert "add_init_script" in calls
         assert "add_cookies" in calls
+
+
+# --- create_persistent_session (Phase I-C-2) ------------------------------
+
+
+@pytest.mark.asyncio
+class TestCreatePersistentSession:
+    """``create_persistent_session(pw, account_id, cookies, ...)`` uses
+    ``chromium.launch_persistent_context(user_data_dir=...)`` so the
+    profile (cookies, localStorage, IndexedDB, service workers) survives
+    across runs.
+
+    Behaviour contract:
+
+      1. ``user_data_dir`` resolves to ``get_profile_path(account_id)``.
+         ``$FB_PROFILE_ROOT`` env override is honoured.
+      2. The directory is materialized (``mkdir(parents=True, exist_ok=True)``)
+         before launch.
+      3. UA + viewport + locale + timezone forwarded to
+         ``launch_persistent_context``.
+      4. Stealth init script is registered BEFORE first nav (just like
+         ``create_session_context`` Phase I-E).
+      5. Cookies are injected ONLY when the profile dir didn't exist before
+         this call (``first_run``). On subsequent runs the persisted
+         cookies in the profile are authoritative — calling
+         ``add_cookies`` again would clobber rotated values.
+    """
+
+    async def test_uses_per_account_profile_dir(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+
+        mock_context = MagicMock()
+        mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
+        mock_pw = MagicMock()
+        mock_pw.chromium.launch_persistent_context = AsyncMock(
+            return_value=mock_context,
+        )
+
+        await create_persistent_session(
+            mock_pw,
+            account_id=7,
+            cookies={"c_user": "1"},
+            user_agent="UA-PIN",
+            viewport={"width": 1366, "height": 768},
+        )
+
+        mock_pw.chromium.launch_persistent_context.assert_awaited_once()
+        args, kwargs = mock_pw.chromium.launch_persistent_context.call_args
+        # First positional arg is user_data_dir; tolerate either positional
+        # or keyword form.
+        target = str(tmp_path / "account-7")
+        if args:
+            assert args[0] == target
+        else:
+            assert kwargs.get("user_data_dir") == target
+
+        # Profile dir must exist on disk before launch.
+        assert (tmp_path / "account-7").is_dir()
+
+    async def test_forwards_ua_viewport_locale_tz(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+
+        mock_context = MagicMock()
+        mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
+        mock_pw = MagicMock()
+        mock_pw.chromium.launch_persistent_context = AsyncMock(
+            return_value=mock_context,
+        )
+
+        await create_persistent_session(
+            mock_pw,
+            account_id=1,
+            cookies={"c_user": "1"},
+            user_agent="UA-PIN",
+            viewport={"width": 1440, "height": 900},
+        )
+
+        kwargs = mock_pw.chromium.launch_persistent_context.call_args.kwargs
+        assert kwargs["user_agent"] == "UA-PIN"
+        assert kwargs["viewport"] == {"width": 1440, "height": 900}
+        assert kwargs["locale"] == "id-ID"
+        assert kwargs["timezone_id"] == "Asia/Jakarta"
+        assert kwargs["headless"] is True
+
+    async def test_default_ua_when_omitted(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+
+        mock_context = MagicMock()
+        mock_context.add_cookies = AsyncMock()
+        mock_context.add_init_script = AsyncMock()
+        mock_pw = MagicMock()
+        mock_pw.chromium.launch_persistent_context = AsyncMock(
+            return_value=mock_context,
+        )
+
+        await create_persistent_session(
+            mock_pw, account_id=1, cookies={"c_user": "1"},
+        )
+        kwargs = mock_pw.chromium.launch_persistent_context.call_args.kwargs
+        assert kwargs["user_agent"] == DEFAULT_USER_AGENT
+
+    async def test_registers_stealth_init_script_before_cookies(
+        self, monkeypatch, tmp_path,
+    ):
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+
+        calls: list[str] = []
+
+        async def _record_init(script):
+            calls.append("init")
+
+        async def _record_add(cookie_list):
+            calls.append("cookies")
+
+        mock_context = MagicMock()
+        mock_context.add_init_script = AsyncMock(side_effect=_record_init)
+        mock_context.add_cookies = AsyncMock(side_effect=_record_add)
+        mock_pw = MagicMock()
+        mock_pw.chromium.launch_persistent_context = AsyncMock(
+            return_value=mock_context,
+        )
+
+        await create_persistent_session(
+            mock_pw, account_id=1, cookies={"c_user": "1"},
+        )
+
+        # Init script registered, then cookies injected (first run).
+        assert calls == ["init", "cookies"]
+        # The exact stealth script body must be the same shared constant.
+        script_arg = mock_context.add_init_script.call_args.args[0]
+        assert script_arg == STEALTH_INIT_SCRIPT
+
+    async def test_first_run_bootstraps_cookies(self, monkeypatch, tmp_path):
+        """When profile dir is empty/new, inject the provided cookies."""
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+
+        mock_context = MagicMock()
+        mock_context.add_init_script = AsyncMock()
+        mock_context.add_cookies = AsyncMock()
+        mock_pw = MagicMock()
+        mock_pw.chromium.launch_persistent_context = AsyncMock(
+            return_value=mock_context,
+        )
+
+        await create_persistent_session(
+            mock_pw, account_id=42, cookies={"c_user": "1", "xs": "X"},
+        )
+
+        mock_context.add_cookies.assert_awaited_once()
+        injected = mock_context.add_cookies.call_args.args[0]
+        names = {c["name"] for c in injected}
+        assert names == {"c_user", "xs"}
+
+    async def test_second_run_skips_cookies(self, monkeypatch, tmp_path):
+        """When profile dir already has prior data, DO NOT call add_cookies.
+
+        The persisted cookie store in the profile is authoritative —
+        re-injecting from DB risks clobbering rotated FB cookies.
+        """
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+
+        # Pre-create profile dir w/ a sentinel file so first_run=False.
+        pdir = tmp_path / "account-9"
+        pdir.mkdir()
+        (pdir / "Cookies").write_text("")
+
+        mock_context = MagicMock()
+        mock_context.add_init_script = AsyncMock()
+        mock_context.add_cookies = AsyncMock()
+        mock_pw = MagicMock()
+        mock_pw.chromium.launch_persistent_context = AsyncMock(
+            return_value=mock_context,
+        )
+
+        await create_persistent_session(
+            mock_pw, account_id=9, cookies={"c_user": "1"},
+        )
+
+        mock_context.add_cookies.assert_not_called()
+        # Init script still registered every run.
+        mock_context.add_init_script.assert_awaited_once()
