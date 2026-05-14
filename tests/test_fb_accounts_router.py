@@ -868,3 +868,106 @@ class TestReUploadCookie:
             headers=_auth(viewer_token),
         )
         assert resp.status_code == 403
+
+
+# --- Phase I-C-4 + I-C-5 — profile dir cleanup hooks ----------------------
+
+
+class TestProfileDirCleanup:
+    """Persistent browser profile (Phase I-C) lifecycle hooks.
+
+    * I-C-4 — ``DELETE /fb-accounts/{id}`` must wipe the on-disk profile
+      so swapped/abandoned accounts don't leave orphaned state.
+    * I-C-5 — ``POST /fb-accounts/{id}/re-upload-cookie`` must wipe the
+      profile before persisting the new cookie. A profile that's already
+      tainted (login wall) can't be salvaged by swapping cookies; the
+      next persistent run must start clean.
+    """
+
+    def _seed_cookie_account(self, client, admin_token, monkeypatch) -> int:
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo("100001", "Old", None)
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+        resp = client.post(
+            "/api/v1/fb-accounts/connect-cookie",
+            json={"label": "Main", "raw_cookies": "c_user=100001; xs=old"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 201, resp.text
+        return resp.json()["id"]
+
+    def test_delete_account_wipes_profile_dir(
+        self, client, admin_token, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+
+        # Materialize a fake profile dir as if a persistent session ran.
+        from bot.modules.browser_profile import get_profile_path
+
+        pdir = get_profile_path(account_id)
+        pdir.mkdir(parents=True)
+        (pdir / "Cookies").write_text("payload")
+        assert pdir.exists()
+
+        resp = client.delete(
+            f"/api/v1/fb-accounts/{account_id}",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+        assert not pdir.exists()
+
+    def test_delete_account_no_profile_dir_is_ok(
+        self, client, admin_token, monkeypatch, tmp_path
+    ):
+        """Delete must still succeed when profile dir was never created."""
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+
+        resp = client.delete(
+            f"/api/v1/fb-accounts/{account_id}",
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200
+
+    def test_reupload_cookie_wipes_profile_dir(
+        self, client, admin_token, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+        account_id = self._seed_cookie_account(client, admin_token, monkeypatch)
+
+        # Materialize a profile dir representing a tainted session.
+        from bot.modules.browser_profile import get_profile_path
+
+        pdir = get_profile_path(account_id)
+        pdir.mkdir(parents=True)
+        (pdir / "Cookies").write_text("tainted")
+        assert pdir.exists()
+
+        # Stub out the live FB validator so re-upload doesn't hit the
+        # real network.
+        from server.services import cookie_session_service as css
+
+        async def fake_validate(_cookies):
+            return css.ProfileInfo("100001", "New", None)
+
+        monkeypatch.setattr(
+            "server.routers.fb_accounts.validate_and_fetch_profile",
+            fake_validate,
+        )
+
+        resp = client.post(
+            f"/api/v1/fb-accounts/{account_id}/re-upload-cookie",
+            json={"raw_cookies": "c_user=100001; xs=fresh"},
+            headers=_auth(admin_token),
+        )
+        assert resp.status_code == 200, resp.text
+        # Profile dir must have been wiped — next persistent run starts
+        # clean from the freshly-uploaded cookie.
+        assert not pdir.exists()
