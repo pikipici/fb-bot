@@ -446,6 +446,7 @@ async def _scan_enabled_sources(
     user_agent: str | None = None,
     viewport: dict[str, int] | None = None,
     on_cookies_refresh=None,
+    account_id: int | None = None,
 ) -> tuple[list[SourceCollectorResult], bool]:
     """Run ``scan_source`` for each source sequentially.
 
@@ -484,6 +485,8 @@ async def _scan_enabled_sources(
                 scan_kwargs["viewport"] = viewport
             if on_cookies_refresh is not None:
                 scan_kwargs["on_cookies_refresh"] = on_cookies_refresh
+            if account_id is not None:
+                scan_kwargs["account_id"] = account_id
             result = await scan_source(source_dict, cookies, **scan_kwargs)
         except CookieExpiredError as exc:
             logger.warning(
@@ -567,6 +570,7 @@ def _run_scan_all_sources(db: Session) -> dict[str, Any]:
             user_agent=pinned_ua,
             viewport=pinned_viewport,
             on_cookies_refresh=_make_cookie_refresh_callback(db, account.id),
+            account_id=account.id,
         )
     )
 

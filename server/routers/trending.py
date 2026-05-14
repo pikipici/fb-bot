@@ -442,6 +442,7 @@ async def send_post_comment(
             user_agent=pinned_ua,
             viewport=pinned_viewport,
             on_cookies_refresh=_refresh_cookies,
+            account_id=account.id,
         )
     except CookieExpiredError as exc:
         logger.warning(
