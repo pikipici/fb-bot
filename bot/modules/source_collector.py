@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Final
@@ -50,6 +51,7 @@ from bot.modules.fb_auth_probe import is_login_wall, login_wall_reason
 from bot.modules.fb_session import (
     DEFAULT_USER_AGENT,
     capture_cookies_from_context,
+    create_persistent_session,
     create_session_context,
 )
 
@@ -280,6 +282,7 @@ async def scan_source(
     on_cookies_refresh: Callable[
         [dict[str, str]], Awaitable[None]
     ] | None = None,
+    account_id: int | None = None,
 ) -> SourceCollectorResult:
     """Scrape one source and return its posts.
 
@@ -289,6 +292,13 @@ async def scan_source(
         cookies: decrypted cookie dict (must contain ``c_user``).
         user_agent: UA to pin for this scan.
         max_posts: upper bound on returned posts after dedup.
+        account_id: ``FBAccount.id`` — required to route through
+            persistent profile (Phase I-C). When ``FB_USE_PERSISTENT_PROFILE=1``
+            and this is provided, scan boots the per-account
+            ``user_data_dir`` via :func:`create_persistent_session`. With
+            either piece missing we fall back to the legacy
+            ``browser.launch`` + ``new_context`` path so a single env flag
+            can roll persistent profile in/out.
     """
     source_id = int(source.get("id", 0))
 
@@ -303,12 +313,29 @@ async def scan_source(
     seen_ids: set[str] = set()
 
     browser = None
+    context = None
     try:
         async with async_playwright() as pw:
-            browser = await pw.chromium.launch(headless=True)
-            context = await create_session_context(
-                browser, cookies, user_agent=user_agent, viewport=viewport,
+            # Phase I-C-3 — route through persistent profile when both the
+            # env flag and ``account_id`` are present. Otherwise, keep the
+            # legacy launch+new_context path so a single flag rolls back.
+            use_persistent = (
+                os.getenv("FB_USE_PERSISTENT_PROFILE") == "1"
+                and account_id is not None
             )
+            if use_persistent:
+                context = await create_persistent_session(
+                    pw,
+                    account_id=int(account_id),
+                    cookies=cookies,
+                    user_agent=user_agent,
+                    viewport=viewport,
+                )
+            else:
+                browser = await pw.chromium.launch(headless=True)
+                context = await create_session_context(
+                    browser, cookies, user_agent=user_agent, viewport=viewport,
+                )
             page = await context.new_page()
 
             await page.goto(
@@ -390,6 +417,14 @@ async def scan_source(
             error=str(exc),
         )
     finally:
+        # Persistent context owns its own Chromium process — close the
+        # context to flush profile dir to disk. Legacy path closes the
+        # browser, which cascades context teardown.
+        if context is not None and browser is None:
+            try:
+                await context.close()
+            except Exception:  # pragma: no cover — playwright teardown
+                logger.debug("persistent context close failed", exc_info=True)
         if browser is not None:
             try:
                 await browser.close()
