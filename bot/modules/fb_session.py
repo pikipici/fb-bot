@@ -33,6 +33,8 @@ from __future__ import annotations
 import random
 from typing import Any, Final
 
+from bot.modules.browser_profile import get_profile_path
+
 DEFAULT_USER_AGENT: Final = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -185,3 +187,78 @@ async def capture_cookies_from_context(
             continue
         out[name] = c.get("value", "")
     return out
+
+
+async def create_persistent_session(
+    playwright: Any,
+    *,
+    account_id: int,
+    cookies: dict[str, str],
+    user_agent: str | None = None,
+    viewport: dict[str, int] | None = None,
+    locale: str = "id-ID",
+    timezone_id: str = "Asia/Jakarta",
+    headless: bool = True,
+) -> Any:
+    """Launch a persistent Chromium context scoped to ``account_id``.
+
+    Phase I-C — replacement for :func:`create_session_context` that uses
+    ``chromium.launch_persistent_context(user_data_dir=...)`` so the full
+    browser profile (cookies, ``localStorage``, ``IndexedDB``, service
+    worker cache, ``fb_dtsg`` token, etc.) survives across runs. Without
+    this, every Playwright session presents the same FB cookie from a
+    brand-new device fingerprint — anti-bot reads "session hijack" and
+    flags us fast (observed ~5h survival in Phase I-A→I-E baseline).
+
+    First-run vs. subsequent-run cookie injection
+    ---------------------------------------------
+    The persistent profile maintains its own cookie store on disk. The
+    first time we boot a profile (empty dir), we ``add_cookies`` from the
+    DB-encrypted dict to bootstrap the session. On every run after that,
+    we deliberately **skip** ``add_cookies`` — re-injecting the DB dict
+    would clobber whatever rotated values FB has written into the
+    profile's cookie store. The Phase I-B rotation capture path is the
+    sole writer back to the DB.
+
+    Args:
+        playwright: a started ``async_playwright`` instance.
+        account_id: ``FBAccount.id``; determines the profile directory.
+        cookies: decrypted cookie dict — only used on the first run for
+            this account.
+        user_agent: pinned UA. Defaults to :data:`DEFAULT_USER_AGENT`.
+        viewport: pinned viewport. Defaults to a random preset.
+        locale: defaults to ``id-ID`` so FB serves the Indonesian UI we
+            parse against.
+        timezone_id: IANA tz; defaults to ``Asia/Jakarta``.
+        headless: defaults ``True`` (server-side scraping).
+
+    Returns:
+        the live :class:`BrowserContext` from
+        ``launch_persistent_context``. Caller is responsible for
+        ``await context.close()`` in a ``finally`` block.
+    """
+    profile_dir = get_profile_path(account_id)
+    first_run = not profile_dir.exists()
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    ua = user_agent or DEFAULT_USER_AGENT
+    vp = viewport or random.choice(_VIEWPORT_PRESETS)
+
+    context = await playwright.chromium.launch_persistent_context(
+        str(profile_dir),
+        headless=headless,
+        user_agent=ua,
+        viewport=vp,
+        locale=locale,
+        timezone_id=timezone_id,
+    )
+    # Stealth patches must register every run — they live in the page,
+    # not the profile, and are reapplied on every navigation.
+    await context.add_init_script(STEALTH_INIT_SCRIPT)
+
+    # Bootstrap cookies only on first run. After that the on-disk cookie
+    # store (kept fresh by Phase I-B rotation capture) is authoritative.
+    if first_run and cookies:
+        await context.add_cookies(cookies_dict_to_playwright_format(cookies))
+
+    return context
