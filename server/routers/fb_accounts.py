@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from bot.modules.browser_profile import wipe_profile
 from server.auth import Role, require_role
 from server.database import get_db
 from server.services.cookie_session_service import (
@@ -154,10 +155,16 @@ def delete_account(
     user=Depends(_admin_only),
     db: Session = Depends(get_db),
 ):
-    """Delete FB account permanently (admin only)."""
+    """Delete FB account permanently (admin only).
+
+    Phase I-C-4 — also wipes the per-account persistent browser profile
+    (``$FB_PROFILE_ROOT/account-<id>``) so swapped/abandoned accounts
+    don't leave orphaned state on disk.
+    """
     svc = FBAccountService(db)
     if not svc.delete_account(account_id):
         raise HTTPException(404, "Account not found")
+    wipe_profile(account_id)
     return {"status": "deleted", "id": account_id}
 
 
@@ -285,6 +292,12 @@ async def re_upload_cookie(
         profile = await validate_and_fetch_profile(cookies)
     except CookieValidationError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+    # Phase I-C-5 — wipe the persistent browser profile before persisting
+    # the new cookie. A profile that triggered a login wall on the
+    # previous cookie set can't be salvaged by swapping cookies; the next
+    # persistent run must start clean from the freshly-uploaded session.
+    wipe_profile(account_id)
 
     svc.replace_cookies(
         account_id,
