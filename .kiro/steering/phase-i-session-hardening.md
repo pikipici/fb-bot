@@ -528,7 +528,7 @@ git commit -m "feat(i-b): capture rotated cookies after scan/send and persist"
 
 ### Phase I-C — Persistent Browser Profile
 
-> **Status:** 🔥 ACTIVE (2026-05-14, unblocked by observation FAIL).
+> **Status:** ✅ DEPLOYED (2026-05-14), 🔴 **OUTCOME FAIL** — flip lebih cepet dari baseline.
 >
 > **Trigger:** Phase I-A→I-E observation window closed FAIL. Akun id=1 flip
 > EXPIRED ~T+5h post re-upload (2026-05-13 16:06:27 UTC), root cause
@@ -537,9 +537,29 @@ git commit -m "feat(i-b): capture rotated cookies after scan/send and persist"
 > di group navigation pageload.
 >
 > **2nd observation Tstart:** 2026-05-14 07:24 UTC (cookie re-uploaded, manual
-> scan id=276 success 2/2 source 4 new posts, akun ACTIVE). Pattern compare:
-> kalau flip EXPIRED <12 UTC = consistent ~5h baseline confirmed. I-C harus ship
-> sebelum cookie flip lagi biar bisa verify mekanisme kerja.
+> scan id=276 success 2/2 source 4 new posts, akun ACTIVE).
+>
+> **Deploy event (2026-05-14 ~08:50 UTC):** push commits I-C-1..I-C-5 → server
+> reset hard ke origin `795f357` → append `FB_USE_PERSISTENT_PROFILE=1` ke
+> `.env` → restart 3 services → manual scan trigger 08:51:39 UTC.
+>
+> **Persistent profile FUNCTIONAL ✓:** `~/.fb-bot/fb-profiles/account-1/Default/`
+> tercipta 08:53 UTC dengan Cookies, IndexedDB, Local Storage, Session Storage,
+> cache directories. First-run bootstrap path execution confirmed via dir
+> creation timing.
+>
+> **OUTCOME ❌:** ScannerRun id=280 finished 08:54:49 UTC dengan
+> `aborted_reason=cookie_expired`, source 1 sukses, source 2 (group
+> `2160701604115230`) trigger login wall — **identik dengan 1st observation
+> failure pattern**. Total survival window dari Tstart 2nd: **~1.5h** (07:24 →
+> 08:54 UTC), **2.5x lebih cepet** dari baseline 1st 5h. Akun saat ini EXPIRED.
+>
+> **Hipotesis baru:** flag bukan di session/profile layer, tapi di tier yang
+> lebih dalam — group-specific watch (group `2160701604115230` udah masuk
+> watchlist FB internal), atau akun Digi Markt udah pre-flagged dari aktivitas
+> sebelumnya. Persistent profile menambah fingerprint stability tapi cookie + IP
+> + akun trio yang kena flag tetap sama. Proxy/IP rotation atau ganti akun =
+> lever berikutnya, bukan stealth lagi.
 >
 > **Implementation notes (discovered during planning):**
 > - `launch_persistent_context` cookies behavior: profile dir punya cookie store
