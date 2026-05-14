@@ -271,3 +271,58 @@ class TestRateLimitExceeded:
             error_message="rate limit preflight",
         )
         assert row.status == "FAILED"
+
+
+class TestEnvOverride:
+    """``MAX_COMMENTS_PER_WINDOW`` env var overrides the hardcoded default.
+
+    Rationale: quota started as an anti-FB-block safety rail, but user wants
+    an informational "komen hari ini" counter instead. Setting env to 9999
+    effectively bypasses the preflight gate without ripping out the service
+    (rollback-friendly: restore env to tighten limit again).
+    """
+
+    def test_env_override_respected_in_status(
+        self, service, db_session, seeded_post, monkeypatch
+    ):
+        """Env var → QuotaStatus.limit reflects override, not constant 5."""
+        monkeypatch.setenv("MAX_COMMENTS_PER_WINDOW", "9999")
+        for i in range(5):
+            _seed_send(db_session, seeded_post, minutes_ago=10 + i)
+
+        status = service.check_allowed()
+
+        assert status.allowed is True
+        assert status.used == 5
+        assert status.limit == 9999
+        assert status.remaining == 9994
+
+    def test_env_override_respected_in_record_send(
+        self, service, db_session, seeded_post, monkeypatch
+    ):
+        """Env var → record_send doesn't raise when constant-default would."""
+        monkeypatch.setenv("MAX_COMMENTS_PER_WINDOW", "9999")
+        for i in range(5):
+            _seed_send(db_session, seeded_post, minutes_ago=10 + i)
+
+        # With default=5 this would raise RateLimitExceededError.
+        row = service.record_send(
+            trending_post_id=seeded_post.id,
+            comment_text="overrun but allowed",
+        )
+        assert row.status == "SENT"
+
+    def test_env_invalid_falls_back_to_default(
+        self, service, db_session, seeded_post, monkeypatch
+    ):
+        """Garbage env value falls back to hardcoded default, not crash."""
+        monkeypatch.setenv("MAX_COMMENTS_PER_WINDOW", "not-a-number")
+        status = service.check_allowed()
+        assert status.limit == 5
+
+    def test_env_unset_uses_default(self, service, monkeypatch):
+        """No env var → default 5 preserved."""
+        monkeypatch.delenv("MAX_COMMENTS_PER_WINDOW", raising=False)
+        status = service.check_allowed()
+        assert status.limit == 5
+        assert status.remaining == 5

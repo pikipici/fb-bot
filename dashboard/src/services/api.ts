@@ -194,6 +194,8 @@ export const api = {
 
   getRateLimitStatus: () => request('/rate-limit/status'),
 
+  getCommentActivity: () => request('/comment-activity/today'),
+
   // Comment history (Layer 2 audit trail)
   listHistory: (params: {
     status?: 'SENT' | 'FAILED' | 'PENDING'

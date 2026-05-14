@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ExternalLink,
   Flame,
-  Gauge,
   Loader2,
   MessageCircle,
   RefreshCw,
@@ -84,19 +83,6 @@ interface DraftResponse {
   post: TrendingPost
 }
 
-interface QuotaStatus {
-  allowed: boolean
-  used: number
-  remaining: number
-  limit: number
-  window_hours: number
-  resets_at: string | null
-}
-
-interface RateLimitResponse {
-  quota: QuotaStatus
-}
-
 interface SendCommentResponse {
   result: {
     success: boolean
@@ -106,7 +92,6 @@ interface SendCommentResponse {
     error: string | null
   }
   post: TrendingPost
-  quota: QuotaStatus
 }
 
 const REFETCH_MS = 30_000
@@ -476,13 +461,6 @@ export default function Trending() {
     refetchOnWindowFocus: true,
   })
 
-  const quotaQuery = useQuery<RateLimitResponse>({
-    queryKey: ['rate-limit-status'],
-    queryFn: () => api.getRateLimitStatus(),
-    refetchInterval: REFETCH_MS,
-    refetchOnWindowFocus: true,
-  })
-
   const draftMutation = useMutation<DraftResponse, Error, number>({
     mutationFn: (postId) => api.generateDraft(postId),
     onSuccess: (data) => {
@@ -544,32 +522,23 @@ export default function Trending() {
       setDraftingPostId(null)
       setDraftText('')
       qc.invalidateQueries({ queryKey: ['trending'] })
-      qc.invalidateQueries({ queryKey: ['rate-limit-status'] })
+      qc.invalidateQueries({ queryKey: ['comment-activity-today'] })
     },
     onError: (err) => {
       toast.error(err.message || 'Gagal kirim komen')
-      qc.invalidateQueries({ queryKey: ['rate-limit-status'] })
+      qc.invalidateQueries({ queryKey: ['comment-activity-today'] })
     },
   })
 
   const posts = trendingQuery.data?.posts ?? []
   const total = trendingQuery.data?.total ?? 0
   const sources = sourcesQuery.data?.sources ?? []
-  const quota = quotaQuery.data?.quota
 
-  const sendDisabled = !isAdmin || !quota || !quota.allowed
+
+  const sendDisabled = !isAdmin
   const sendDisabledReason = !isAdmin
     ? 'Butuh role admin buat kirim komen'
-    : !quota
-      ? 'Memeriksa quota...'
-      : !quota.allowed
-        ? `Quota habis — reset ${
-            quota.resets_at
-              ? formatRelative(quota.resets_at)
-              : 'nanti'
-          }`
-        : ''
-
+    : ''
   // When filters change, close any open draft since the post may not be in
   // the current page anymore.
   useEffect(() => {
@@ -610,52 +579,6 @@ export default function Trending() {
             </Button>
           </div>
         </div>
-
-        <Card className="p-3">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2">
-              <Gauge
-                className={cn(
-                  'h-3.5 w-3.5',
-                  quota && !quota.allowed
-                    ? 'text-destructive'
-                    : 'text-muted-foreground',
-                )}
-              />
-              <span className="text-xs font-medium">
-                Quota komen
-              </span>
-            </div>
-            <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
-              {quota ? (
-                <>
-                  <span
-                    className={cn(
-                      'font-medium',
-                      !quota.allowed && 'text-destructive',
-                    )}
-                  >
-                    {quota.used}/{quota.limit}
-                  </span>
-                  <span>dalam {quota.window_hours} jam</span>
-                  {quota.resets_at && (
-                    <>
-                      <span className="opacity-50">•</span>
-                      <span>reset {formatRelative(quota.resets_at)}</span>
-                    </>
-                  )}
-                </>
-              ) : (
-                <span>memuat...</span>
-              )}
-            </div>
-            {quota && !quota.allowed && (
-              <span className="text-destructive ml-auto text-xs font-medium">
-                Send diblok sampai quota reset
-              </span>
-            )}
-          </div>
-        </Card>
 
         <Card className="p-3">
           <div className="flex flex-wrap items-center gap-3">

@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 
 from server.routers import (
     auth,
+    comment_activity,
     fb_accounts,
     health,
     history,
@@ -101,6 +102,9 @@ app.include_router(sources.router, prefix="/api/v1", tags=["sources"])
 app.include_router(trending.router, prefix="/api/v1", tags=["trending"])
 app.include_router(templates.router, prefix="/api/v1", tags=["templates"])
 app.include_router(rate_limit.router, prefix="/api/v1", tags=["rate-limit"])
+app.include_router(
+    comment_activity.router, prefix="/api/v1", tags=["comment-activity"]
+)
 app.include_router(history.router, prefix="/api/v1", tags=["history"])
 app.include_router(scanner.router, prefix="/api/v1", tags=["scanner"])
 
