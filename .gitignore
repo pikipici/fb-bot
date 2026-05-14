@@ -33,3 +33,4 @@ Thumbs.db
 bot/data/exports/*.csv
 dashboard/node_modules/
 dashboard/dist/
+.hermes-tmp/
