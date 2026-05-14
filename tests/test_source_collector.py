@@ -361,3 +361,97 @@ class TestScanSource:
 
         # Scan itself still reports success — the harvest is opportunistic.
         assert result.success is True
+
+
+# --- Phase I-C-3 — persistent profile routing -----------------------------
+
+
+@pytest.mark.asyncio
+class TestScanSourcePersistentRouting:
+    """When ``FB_USE_PERSISTENT_PROFILE=1`` and ``account_id`` is given,
+    ``scan_source`` must route through ``create_persistent_session``
+    instead of ``browser.launch`` + ``create_session_context``.
+
+    The default (env unset) keeps the legacy path so we have a single-flag
+    rollback if persistent profile causes regressions in production.
+    """
+
+    async def test_persistent_route_when_env_set(
+        self, mock_playwright_stack, monkeypatch, tmp_path
+    ):
+        monkeypatch.setenv("FB_USE_PERSISTENT_PROFILE", "1")
+        monkeypatch.setenv("FB_PROFILE_ROOT", str(tmp_path))
+
+        mocks = mock_playwright_stack
+
+        # Capture create_persistent_session calls.
+        seen: dict = {}
+
+        async def _fake_persistent(pw, **kwargs):
+            seen["called"] = True
+            seen["kwargs"] = kwargs
+            return mocks["context"]
+
+        with patch(
+            "bot.modules.source_collector.async_playwright",
+            mocks["async_playwright"],
+        ), patch(
+            "bot.modules.source_collector.create_persistent_session",
+            _fake_persistent,
+        ):
+            await scan_source(
+                {"id": 1, "type": "home_feed"},
+                {"c_user": "1"},
+                account_id=42,
+                user_agent="UA-PIN",
+                viewport={"width": 1366, "height": 768},
+            )
+
+        assert seen.get("called") is True
+        assert seen["kwargs"]["account_id"] == 42
+        assert seen["kwargs"]["user_agent"] == "UA-PIN"
+        assert seen["kwargs"]["viewport"] == {"width": 1366, "height": 768}
+        # Legacy browser.launch must NOT have been called when routing
+        # through persistent profile.
+        assert mocks["pw"].chromium.launch.await_count == 0
+
+    async def test_legacy_route_when_env_unset(
+        self, mock_playwright_stack, monkeypatch
+    ):
+        """Default (env unset) keeps the existing browser.launch path."""
+        monkeypatch.delenv("FB_USE_PERSISTENT_PROFILE", raising=False)
+
+        mocks = mock_playwright_stack
+
+        with patch(
+            "bot.modules.source_collector.async_playwright",
+            mocks["async_playwright"],
+        ):
+            await scan_source(
+                {"id": 1, "type": "home_feed"},
+                {"c_user": "1"},
+                account_id=42,
+            )
+
+        # Legacy: chromium.launch + new_context route.
+        assert mocks["pw"].chromium.launch.await_count == 1
+
+    async def test_legacy_route_when_account_id_missing(
+        self, mock_playwright_stack, monkeypatch
+    ):
+        """Even with env set, no ``account_id`` → fallback (defensive)."""
+        monkeypatch.setenv("FB_USE_PERSISTENT_PROFILE", "1")
+
+        mocks = mock_playwright_stack
+
+        with patch(
+            "bot.modules.source_collector.async_playwright",
+            mocks["async_playwright"],
+        ):
+            await scan_source(
+                {"id": 1, "type": "home_feed"},
+                {"c_user": "1"},
+                # account_id intentionally omitted.
+            )
+
+        assert mocks["pw"].chromium.launch.await_count == 1
