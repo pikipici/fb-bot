@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import random
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -43,6 +44,7 @@ from playwright.async_api import async_playwright
 from bot.modules.fb_auth_probe import is_login_wall, login_wall_reason
 from bot.modules.fb_session import (
     capture_cookies_from_context,
+    create_persistent_session,
     create_session_context,
 )
 
@@ -366,6 +368,7 @@ async def send_comment(
     on_cookies_refresh: Callable[
         [dict[str, str]], Awaitable[None]
     ] | None = None,
+    account_id: int | None = None,
 ) -> SendResult:
     """Post ``comment_text`` as a comment under ``post_url``.
 
@@ -388,12 +391,30 @@ async def send_comment(
         )
 
     browser = None
+    context = None
     async with async_playwright() as pw:
         try:
-            browser = await pw.chromium.launch(headless=headless)
-            context = await create_session_context(
-                browser, cookies, user_agent=user_agent, viewport=viewport,
+            # Phase I-C-3 — route through persistent profile when both
+            # the env flag and ``account_id`` are present. Mirror of
+            # ``scan_source`` so a single env var rolls back both flows.
+            use_persistent = (
+                os.getenv("FB_USE_PERSISTENT_PROFILE") == "1"
+                and account_id is not None
             )
+            if use_persistent:
+                context = await create_persistent_session(
+                    pw,
+                    account_id=int(account_id),
+                    cookies=cookies,
+                    user_agent=user_agent,
+                    viewport=viewport,
+                    headless=headless,
+                )
+            else:
+                browser = await pw.chromium.launch(headless=headless)
+                context = await create_session_context(
+                    browser, cookies, user_agent=user_agent, viewport=viewport,
+                )
             page = await context.new_page()
 
             await page.goto(
@@ -528,6 +549,14 @@ async def send_comment(
                 fb_comment_id=fb_comment_id,
             )
         finally:
+            # Persistent context owns its own Chromium process — close it
+            # to flush profile dir to disk. Legacy path closes the browser
+            # which cascades context teardown.
+            if context is not None and browser is None:
+                try:
+                    await context.close()
+                except Exception:  # pragma: no cover
+                    pass
             if browser is not None:
                 try:
                     await browser.close()
