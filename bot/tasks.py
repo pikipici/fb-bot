@@ -401,6 +401,46 @@ def _make_cookie_refresh_callback(db: Session, account_id: int):
     return _refresh
 
 
+# Phase J — Self-rescheduling scan chain.
+#
+# Beat no longer drives ``scan_all_sources`` directly. Instead each finished
+# scan picks its own random countdown via ``apply_async`` so FB anti-bot can't
+# track a fixed inter-scan delta. ``scan_watchdog`` (5-min beat) re-arms a
+# stale chain. The env knob ``SCAN_SELFSCHED_DISABLED=1`` short-circuits the
+# rescheduling for emergency rollback to watchdog-only cadence.
+
+
+def _enqueue_next_scan(*, source: str = "selfsched") -> float | None:
+    """Schedule the next ``scan_all_sources`` with a random countdown.
+
+    Returns the chosen countdown (in seconds) for testability/logging.
+    Returns ``None`` (and skips dispatch) when ``SCAN_SELFSCHED_DISABLED=1``.
+    """
+    if os.getenv("SCAN_SELFSCHED_DISABLED") == "1":
+        logger.info(
+            "scan self-rescheduling DISABLED via env (SCAN_SELFSCHED_DISABLED), "
+            "skipping reschedule"
+        )
+        return None
+
+    import random
+
+    from bot.celery_app import _scan_max_interval, _scan_min_interval
+
+    countdown = random.uniform(_scan_min_interval(), _scan_max_interval())
+    scan_all_sources.apply_async(
+        kwargs={"trigger": source},
+        countdown=countdown,
+    )
+    logger.info(
+        "scan self-rescheduled: next in %.1fs (%.1f min) trigger=%s",
+        countdown,
+        countdown / 60.0,
+        source,
+    )
+    return countdown
+
+
 # Phase I-D — Scanner cadence humanization.
 #
 # FB anti-bot flags rapid, on-the-second auth rhythms coming from a single
@@ -645,7 +685,12 @@ def scan_all_sources(self, trigger: str = "beat"):  # noqa: ANN001
     with _db_session() as db:
         run = ScannerRun(
             task_id=str(task_id) if task_id else None,
-            trigger=trigger if trigger in ("beat", "manual") else "beat",
+            # Phase J — whitelist expanded for self-rescheduling chain.
+            trigger=(
+                trigger
+                if trigger in ("beat", "manual", "selfsched", "watchdog")
+                else "beat"
+            ),
             status="running",
             started_at=datetime.now(timezone.utc),
         )
@@ -664,6 +709,13 @@ def scan_all_sources(self, trigger: str = "beat"):  # noqa: ANN001
             status="failed",
             error_message=str(exc),
         )
+        # Phase J — even on crash, keep the chain alive so watchdog isn't
+        # the only thing rescuing us. Worst case ``_enqueue_next_scan``
+        # itself blows up; that's why we swallow exceptions here.
+        try:
+            _enqueue_next_scan()
+        except Exception:  # noqa: BLE001
+            logger.exception("scan_all_sources reschedule failed (post-crash)")
         return {"aborted": True, "reason": "exception", "error": str(exc)}
 
     _finalize_scanner_run(
@@ -671,6 +723,11 @@ def scan_all_sources(self, trigger: str = "beat"):  # noqa: ANN001
         status="failed" if summary.get("aborted") else "success",
         summary=summary,
     )
+    # Phase J — happy-path chain continuation.
+    try:
+        _enqueue_next_scan()
+    except Exception:  # noqa: BLE001
+        logger.exception("scan_all_sources reschedule failed (post-success)")
     return summary
 
 
