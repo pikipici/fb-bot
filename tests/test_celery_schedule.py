@@ -139,3 +139,78 @@ class TestBeatSchedule:
             assert key in mod.app.conf.beat_schedule, (
                 f"beat schedule lost preserved entry: {key}"
             )
+
+
+class TestAutoCommentRandomizedRange:
+    """Phase K-2 — random cadence bounds for auto-comment selfsched chain.
+
+    Range default 720..1800s (12..30 min). Mirror Phase J pattern but slower
+    so we stay under 5/6h rate-limit cap with comfortable margin.
+    """
+
+    def test_min_default_is_12_minutes(self, reload_celery_app, monkeypatch):
+        monkeypatch.delenv("AUTO_COMMENT_MIN_INTERVAL_SECONDS", raising=False)
+        mod = reload_celery_app()
+        assert mod._auto_comment_min_interval() == 720
+
+    def test_max_default_is_30_minutes(self, reload_celery_app, monkeypatch):
+        monkeypatch.delenv("AUTO_COMMENT_MAX_INTERVAL_SECONDS", raising=False)
+        mod = reload_celery_app()
+        assert mod._auto_comment_max_interval() == 1800
+
+    def test_min_env_override(self, reload_celery_app, monkeypatch):
+        monkeypatch.setenv("AUTO_COMMENT_MIN_INTERVAL_SECONDS", "900")
+        mod = reload_celery_app()
+        assert mod._auto_comment_min_interval() == 900
+
+    def test_max_env_override(self, reload_celery_app, monkeypatch):
+        monkeypatch.setenv("AUTO_COMMENT_MAX_INTERVAL_SECONDS", "2400")
+        mod = reload_celery_app()
+        assert mod._auto_comment_max_interval() == 2400
+
+    def test_min_strictly_less_than_max_at_default(
+        self, reload_celery_app, monkeypatch
+    ):
+        monkeypatch.delenv("AUTO_COMMENT_MIN_INTERVAL_SECONDS", raising=False)
+        monkeypatch.delenv("AUTO_COMMENT_MAX_INTERVAL_SECONDS", raising=False)
+        mod = reload_celery_app()
+        assert mod._auto_comment_min_interval() < mod._auto_comment_max_interval()
+
+
+class TestAutoCommentWatchdogInterval:
+    """Phase K-2 — watchdog beat schedule for auto-comment chain."""
+
+    def test_default_is_5_minutes(self, reload_celery_app, monkeypatch):
+        monkeypatch.delenv(
+            "AUTO_COMMENT_WATCHDOG_INTERVAL_SECONDS", raising=False
+        )
+        mod = reload_celery_app()
+        assert mod._auto_comment_watchdog_interval() == 300
+
+    def test_env_override_respected(self, reload_celery_app, monkeypatch):
+        monkeypatch.setenv("AUTO_COMMENT_WATCHDOG_INTERVAL_SECONDS", "180")
+        mod = reload_celery_app()
+        assert mod._auto_comment_watchdog_interval() == 180
+
+
+class TestAutoCommentBeatSchedule:
+    """Phase K-2 — beat schedule must include auto-comment-watchdog."""
+
+    def test_auto_comment_watchdog_present_in_beat(
+        self, reload_celery_app, monkeypatch
+    ):
+        mod = reload_celery_app()
+        assert "auto-comment-watchdog" in mod.app.conf.beat_schedule
+        entry = mod.app.conf.beat_schedule["auto-comment-watchdog"]
+        assert entry["task"] == "bot.tasks.auto_comment_watchdog"
+        assert entry["schedule"] == 300  # default 5 min
+
+    def test_auto_comment_watchdog_schedule_respects_env(
+        self, reload_celery_app, monkeypatch
+    ):
+        monkeypatch.setenv("AUTO_COMMENT_WATCHDOG_INTERVAL_SECONDS", "120")
+        mod = reload_celery_app()
+        assert (
+            mod.app.conf.beat_schedule["auto-comment-watchdog"]["schedule"]
+            == 120
+        )
