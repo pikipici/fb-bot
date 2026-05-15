@@ -26,12 +26,18 @@ from bot.modules.orchestrator import Orchestrator
 from bot.modules.parser import Parser
 from bot.modules.rate_guard import RateGuard
 from bot.modules.scheduler import TargetScheduler
+from bot.modules.comment_sender import (
+    CheckpointRequiredError,
+    CommentSendError,
+    send_comment,
+)
 from bot.modules.source_collector import (
     CookieExpiredError,
     SourceCollectorResult,
     scan_source,
 )
 from server.database import SessionLocal
+from server.crypto import decrypt_cookies
 
 logger = logging.getLogger(__name__)
 
@@ -855,3 +861,407 @@ def scan_watchdog():  # noqa: ANN201
         max_idle,
     )
     return {"action": "skip", "reason": "fresh", "idle_seconds": idle}
+
+
+# ---------------------------------------------------------------------------
+# Phase K — Auto-Comment self-rescheduling chain
+# ---------------------------------------------------------------------------
+#
+# Mirrors Phase J pattern. Beat does NOT drive ``auto_comment_next`` — the
+# task self-reschedules with ``random.uniform(min, max)`` countdown so FB
+# anti-bot can't lock onto a fixed inter-comment delta. ``auto_comment_watchdog``
+# (5-min beat) re-arms a stalled chain. ``AUTO_COMMENT_DISABLED=1`` env kill
+# switch puts the whole pipeline to sleep.
+
+
+def _enqueue_next_comment(*, source: str = "selfsched") -> float | None:
+    """Schedule the next ``auto_comment_next`` with a random countdown.
+
+    Returns the chosen countdown (seconds) for testability/logging. Returns
+    ``None`` (and skips dispatch) when ``AUTO_COMMENT_DISABLED=1``.
+    """
+    if os.getenv("AUTO_COMMENT_DISABLED") == "1":
+        logger.info(
+            "auto-comment self-rescheduling DISABLED via env "
+            "(AUTO_COMMENT_DISABLED), skipping reschedule"
+        )
+        return None
+
+    import random
+
+    from bot.celery_app import (
+        _auto_comment_max_interval,
+        _auto_comment_min_interval,
+    )
+
+    countdown = random.uniform(
+        _auto_comment_min_interval(), _auto_comment_max_interval()
+    )
+    auto_comment_next.apply_async(
+        kwargs={"trigger": source},
+        countdown=countdown,
+    )
+    logger.info(
+        "auto-comment self-rescheduled: next in %.1fs (%.1f min) trigger=%s",
+        countdown,
+        countdown / 60.0,
+        source,
+    )
+    return countdown
+
+
+def _record_comment_failure(
+    db: Session,
+    *,
+    post_id: int,
+    comment_text: str,
+    error_message: str,
+    flip_post_to_skipped: bool = True,
+) -> None:
+    """Insert a FAILED CommentHistory row + optionally flip the post status.
+
+    Defensive: never raises (audit trail is best-effort). Used by every
+    error path in ``auto_comment_next`` so dedup stays correct.
+    """
+    from server.models import CommentHistory, TrendingPost
+
+    try:
+        row = CommentHistory(
+            trending_post_id=post_id,
+            comment_text=comment_text or "",
+            status="FAILED",
+            error_message=error_message[:1000],
+        )
+        db.add(row)
+        if flip_post_to_skipped:
+            post = (
+                db.query(TrendingPost)
+                .filter(TrendingPost.id == post_id)
+                .first()
+            )
+            if post is not None and post.status == "NEW":
+                post.status = "SKIPPED"
+        db.commit()
+    except Exception:  # noqa: BLE001 — never let audit failure mask task result
+        logger.exception(
+            "failed to record auto-comment failure for post=%s", post_id
+        )
+
+
+@app.task
+def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
+    """Pick + draft + send one auto-comment, then reschedule next.
+
+    Returns ``{action, reason, ...}`` for observability.
+
+    Lifecycle, with self-reschedule firing in ``finally`` on every path
+    EXCEPT the kill-switch (which intentionally pauses the chain):
+      1. Kill-switch → return ``{action: 'disabled'}`` no reschedule.
+      2. Pick eligible post → ``no_eligible`` skip + reschedule.
+      3. Pre-check rate limit → ``rate_limited`` skip + reschedule.
+      4. Pick ACTIVE FB account → ``no_account`` skip + reschedule.
+      5. Generate AI draft → on error, record FAILED + flip post SKIPPED.
+      6. Send via Playwright → on cookie expire, flip account EXPIRED;
+         on other error, flip post SKIPPED.
+      7. On success → record_send SENT (post auto-flips COMMENTED).
+    """
+    if trigger not in ("selfsched", "watchdog", "manual"):
+        logger.warning("auto_comment_next: unexpected trigger=%r", trigger)
+
+    if os.getenv("AUTO_COMMENT_DISABLED") == "1":
+        logger.info("auto_comment_next: pipeline disabled via env, paused")
+        return {"action": "disabled", "reason": "kill_switch"}
+
+    result: dict[str, Any] = {}
+
+    try:
+        with _db_session() as db:
+            # 1. Pick eligible post
+            from server.services.auto_comment_service import (
+                AutoCommentService,
+            )
+
+            post = AutoCommentService(db).pick_next_eligible_post()
+            if post is None:
+                logger.info("auto_comment_next: no eligible post, skipping")
+                result = {"action": "skip", "reason": "no_eligible"}
+                return result
+
+            post_id = post.id
+            post_url = post.post_url or ""
+
+            # 2. Rate limit pre-check
+            from server.services.rate_limit_service import RateLimitService
+
+            rate_svc = RateLimitService(db)
+            quota = rate_svc.check_allowed()
+            if not quota.allowed:
+                logger.info(
+                    "auto_comment_next: quota exceeded %d/%d, skip post=%s",
+                    quota.used,
+                    quota.limit,
+                    post_id,
+                )
+                result = {
+                    "action": "skip",
+                    "reason": "rate_limited",
+                    "post_id": post_id,
+                }
+                return result
+
+            # 3. Active FB account
+            account = _pick_active_account(db)
+            if account is None:
+                logger.info(
+                    "auto_comment_next: no ACTIVE FB account, skip post=%s",
+                    post_id,
+                )
+                result = {
+                    "action": "skip",
+                    "reason": "no_account",
+                    "post_id": post_id,
+                }
+                return result
+
+            account_id = account.id
+
+            try:
+                cookies = decrypt_cookies(account.cookies_encrypted or "")
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "auto_comment_next: decrypt cookies failed account=%s",
+                    account_id,
+                )
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text="",
+                    error_message=f"decrypt_cookies_failed: {exc}",
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "decrypt_failed",
+                    "post_id": post_id,
+                }
+                return result
+
+            # 4. AI draft
+            from server.services.ai_draft_service import (
+                AIDraftService,
+                AIDraftServiceError,
+            )
+
+            try:
+                draft = AIDraftService(db).generate(
+                    post_id=post_id, user_id=0
+                )
+            except AIDraftServiceError as exc:
+                logger.warning(
+                    "auto_comment_next: ai_draft error post=%s: %s",
+                    post_id,
+                    exc,
+                )
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text="",
+                    error_message=f"ai_draft_error: {exc}",
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "ai_draft_error",
+                    "post_id": post_id,
+                }
+                return result
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "auto_comment_next: ai_draft unexpected error post=%s",
+                    post_id,
+                )
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text="",
+                    error_message=f"ai_draft_unexpected: {exc}",
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "ai_draft_error",
+                    "post_id": post_id,
+                }
+                return result
+
+            # 5. Pin fingerprint, build cookie refresh callback
+            from server.services.fb_account_service import FBAccountService
+
+            fp_svc = FBAccountService(db)
+            pinned_ua, pinned_w, pinned_h = fp_svc.ensure_fingerprint(
+                account_id
+            )
+            display_name = account.fb_name or account.label or "me"
+            refresh_cb = _make_cookie_refresh_callback(db, account_id)
+
+            # 6. Send comment via Playwright
+            try:
+                send_result = asyncio.run(
+                    send_comment(
+                        post_url=post_url,
+                        comment_text=draft,
+                        cookies=cookies,
+                        display_name=display_name,
+                        user_agent=pinned_ua,
+                        viewport={"width": pinned_w, "height": pinned_h},
+                        on_cookies_refresh=refresh_cb,
+                        account_id=account_id,
+                    )
+                )
+            except CookieExpiredError as exc:
+                logger.warning(
+                    "auto_comment_next: cookie_expired account=%s post=%s: %s",
+                    account_id,
+                    post_id,
+                    exc,
+                )
+                _mark_cookies_expired(db, account)
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text=draft,
+                    error_message=f"cookie_expired: {exc}",
+                    flip_post_to_skipped=False,
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "cookie_expired",
+                    "post_id": post_id,
+                }
+                return result
+            except CheckpointRequiredError as exc:
+                logger.warning(
+                    "auto_comment_next: checkpoint account=%s post=%s: %s",
+                    account_id,
+                    post_id,
+                    exc,
+                )
+                account.status = "CHECKPOINT"
+                db.commit()
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text=draft,
+                    error_message=f"checkpoint: {exc}",
+                    flip_post_to_skipped=False,
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "checkpoint",
+                    "post_id": post_id,
+                }
+                return result
+            except CommentSendError as exc:
+                logger.exception(
+                    "auto_comment_next: comment_sender_error post=%s",
+                    post_id,
+                )
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text=draft,
+                    error_message=f"sender_error: {exc}",
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "sender_error",
+                    "post_id": post_id,
+                }
+                return result
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "auto_comment_next: unexpected send error post=%s",
+                    post_id,
+                )
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text=draft,
+                    error_message=f"unexpected_send_error: {exc}",
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "unexpected",
+                    "post_id": post_id,
+                }
+                return result
+
+            # 7. Send returned without raising — check soft-failure flag.
+            if not getattr(send_result, "success", False):
+                err = getattr(send_result, "error", None) or "send_failed"
+                logger.warning(
+                    "auto_comment_next: soft-fail send post=%s: %s",
+                    post_id,
+                    err,
+                )
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text=draft,
+                    error_message=f"soft_fail: {err}",
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "send_soft_fail",
+                    "post_id": post_id,
+                }
+                return result
+
+            # SUCCESS path — record SENT, RateLimitService flips post=COMMENTED.
+            try:
+                rate_svc.record_send(
+                    trending_post_id=post_id,
+                    comment_text=draft,
+                    user_id=None,
+                    fb_comment_id=getattr(send_result, "comment_id", None),
+                    status="SENT",
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception(
+                    "auto_comment_next: record_send failed post=%s "
+                    "(comment was sent on FB!)",
+                    post_id,
+                )
+                # Best-effort: still mark FAILED so we don't double-send.
+                _record_comment_failure(
+                    db,
+                    post_id=post_id,
+                    comment_text=draft,
+                    error_message=f"record_send_failed: {exc}",
+                    flip_post_to_skipped=False,
+                )
+                result = {
+                    "action": "failed",
+                    "reason": "record_send_failed",
+                    "post_id": post_id,
+                }
+                return result
+
+            logger.info(
+                "auto_comment_next: SENT post=%s account=%s draft_len=%d",
+                post_id,
+                account_id,
+                len(draft),
+            )
+            result = {
+                "action": "sent",
+                "post_id": post_id,
+                "account_id": account_id,
+                "draft": draft,
+            }
+            return result
+    finally:
+        # Phase K — always reschedule (kill-switch already returned above).
+        try:
+            _enqueue_next_comment(source="selfsched")
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "auto_comment_next: failed to self-reschedule, watchdog will recover"
+            )
