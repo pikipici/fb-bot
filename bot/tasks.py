@@ -13,7 +13,7 @@ import json
 import logging
 import os
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -687,6 +687,41 @@ def scan_all_sources(self, trigger: str = "beat"):  # noqa: ANN001
 
     task_id = getattr(self.request, "id", None) if hasattr(self, "request") else None
     logger.info("scan_all_sources task started (trigger=%s id=%s)", trigger, task_id)
+
+    # Phase L-1 — duplicate chain absorption guard.
+    # When two chains co-exist (e.g. operator manually triggered while
+    # watchdog had just kicked, or a deploy left an extra _enqueue_next_scan
+    # in flight), they will eventually converge and run two parallel
+    # Playwright sessions on the same FB account → checkpoint → cookie burn.
+    # If a recent ScannerRun is still 'running', this tick is a duplicate:
+    # exit early WITHOUT inserting a new row and WITHOUT self-rescheduling
+    # so the duplicate branch dies cleanly.
+    inflight_window = int(
+        os.getenv("SCAN_INFLIGHT_WINDOW_SECONDS", "600")
+    )  # 10 min default — safely > realistic scan duration ~2-3 min
+    cutoff = datetime.now(timezone.utc) - timedelta(seconds=inflight_window)
+    with _db_session() as db:
+        in_flight = (
+            db.query(ScannerRun)
+            .filter(ScannerRun.status == "running")
+            .filter(ScannerRun.started_at >= cutoff)
+            .order_by(ScannerRun.id.desc())
+            .first()
+        )
+        if in_flight is not None:
+            logger.warning(
+                "scan_all_sources: duplicate chain detected "
+                "(in_flight id=%s started_at=%s trigger=%s), "
+                "absorbing branch (no new row, no reschedule)",
+                in_flight.id,
+                in_flight.started_at,
+                trigger,
+            )
+            return {
+                "aborted": True,
+                "reason": "duplicate_chain",
+                "in_flight_id": in_flight.id,
+            }
 
     run_id: int | None = None
     with _db_session() as db:
