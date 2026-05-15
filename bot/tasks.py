@@ -770,3 +770,88 @@ def _finalize_scanner_run(
             db.commit()
     except Exception:  # noqa: BLE001 — never let audit failure mask task result
         logger.exception("failed to finalize scanner_run id=%s", run_id)
+
+
+# Phase J-3 — watchdog safety net.
+#
+# The self-rescheduling chain breaks if a worker crashes after
+# ``_finalize_scanner_run`` but before ``_enqueue_next_scan`` lands the next
+# message in the broker, or if Redis loses the queued message, or if someone
+# manually purges the celery queue. Beat fires this watchdog every 5 minutes
+# (default) to detect that and re-arm the chain. Cheap query, idempotent.
+
+
+@app.task
+def scan_watchdog():  # noqa: ANN201
+    """Detect a stale scan chain and re-kick if needed.
+
+    Returns a dict ``{action, reason, [idle_seconds]}`` for observability.
+    Logic:
+      * scan currently running → skip (no double-trigger)
+      * no ScannerRun history at all → kick (bootstrap)
+      * last run finished/started > ``SCAN_MAX_IDLE_SECONDS`` ago → kick
+      * otherwise → skip (chain healthy)
+
+    Never raises — defensive against DB/broker hiccups.
+    """
+    from server.models import ScannerRun
+
+    max_idle = int(os.getenv("SCAN_MAX_IDLE_SECONDS", "1800"))  # 30 min default
+
+    with _db_session() as db:
+        running = (
+            db.query(ScannerRun)
+            .filter(ScannerRun.status == "running")
+            .first()
+        )
+        if running:
+            logger.debug(
+                "scan_watchdog: scan currently running (id=%s), skip",
+                running.id,
+            )
+            return {"action": "skip", "reason": "running"}
+
+        last = (
+            db.query(ScannerRun)
+            .order_by(ScannerRun.id.desc())
+            .first()
+        )
+
+    if last is None:
+        logger.info("scan_watchdog: no ScannerRun history, kicking bootstrap")
+        scan_all_sources.apply_async(kwargs={"trigger": "watchdog"})
+        return {"action": "kick", "reason": "no_history"}
+
+    # Use finished_at when present, fall back to started_at (mid-flight crash).
+    pivot = last.finished_at or last.started_at
+    if pivot is None:
+        # Truly malformed row — be conservative and kick.
+        logger.warning(
+            "scan_watchdog: ScannerRun id=%s has no started/finished, kicking",
+            last.id,
+        )
+        scan_all_sources.apply_async(kwargs={"trigger": "watchdog"})
+        return {"action": "kick", "reason": "malformed"}
+
+    # Coerce naive → UTC so comparison doesn't blow up on legacy rows.
+    if pivot.tzinfo is None:
+        pivot = pivot.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    idle = (now - pivot).total_seconds()
+
+    if idle > max_idle:
+        logger.info(
+            "scan_watchdog: chain stale (idle=%.1fs > %ds), kicking",
+            idle,
+            max_idle,
+        )
+        scan_all_sources.apply_async(kwargs={"trigger": "watchdog"})
+        return {"action": "kick", "reason": "stale", "idle_seconds": idle}
+
+    logger.debug(
+        "scan_watchdog: chain healthy (idle=%.1fs ≤ %ds), skip",
+        idle,
+        max_idle,
+    )
+    return {"action": "skip", "reason": "fresh", "idle_seconds": idle}
