@@ -1007,6 +1007,49 @@ def _enqueue_next_comment(*, source: str = "selfsched") -> float | None:
     return countdown
 
 
+def _get_redis_client():
+    """Phase L-3 — return a Redis client connected to the broker.
+
+    Lazy import + lazy connect so test environments without Redis don't
+    fail at import time.
+    """
+    import redis  # noqa: WPS433 — lazy import for test isolation
+
+    from bot.celery_app import REDIS_URL
+
+    return redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+
+def _acquire_auto_comment_fire_lock() -> bool:
+    """Phase L-3 — single-fire lock for ``auto_comment_next``.
+
+    Atomically SET NX EX with TTL = ``_auto_comment_min_interval()``. If the
+    key exists, another tick just fired within the rate window — caller
+    should skip + NOT self-reschedule (otherwise broker backlog after a
+    restart spawns parallel chains, observed in obs#6 = 91 ticks/30 min).
+
+    Defensive: any Redis error (connection refused, timeout) returns
+    ``True`` (fail-open). Better to risk one extra tick than to silently
+    pause the entire pipeline.
+    """
+    from bot.celery_app import _auto_comment_min_interval
+
+    try:
+        r = _get_redis_client()
+        ttl = _auto_comment_min_interval()
+        # SET NX EX is the canonical atomic lock primitive.
+        acquired = r.set(
+            "auto_comment:fire_lock", "1", nx=True, ex=ttl
+        )
+        return bool(acquired)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "auto_comment fire-lock check failed (Redis err=%s), failing open",
+            exc,
+        )
+        return True
+
+
 def _record_comment_draft(
     db: Session,
     *,
@@ -1103,6 +1146,22 @@ def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
     if os.getenv("AUTO_COMMENT_DISABLED") == "1":
         logger.info("auto_comment_next: pipeline disabled via env, paused")
         return {"action": "disabled", "reason": "kill_switch"}
+
+    # Phase L-3 — fire-rate lock to absorb broker backlog bursts and
+    # restart spam. If a sibling task fired within min_interval, skip +
+    # do NOT self-reschedule (otherwise the chain multiplies). Run BEFORE
+    # try-block so we don't enter the finally-self-resched branch.
+    if not _acquire_auto_comment_fire_lock():
+        logger.info(
+            "auto_comment_next: fire_lock held (sibling tick within "
+            "min_interval), skip + no resched (trigger=%s)",
+            trigger,
+        )
+        return {
+            "action": "skip",
+            "reason": "fire_lock_held",
+            "trigger": trigger,
+        }
 
     result: dict[str, Any] = {}
 
