@@ -164,6 +164,10 @@ class TestAutoCommentNext:
         monkeypatch.setattr(
             "bot.tasks.auto_comment_next.apply_async", apply_async
         )
+        # Phase L-3 — bypass Redis fire-lock in K-3 tests (predate L-3).
+        monkeypatch.setattr(
+            "bot.tasks._acquire_auto_comment_fire_lock", lambda: True
+        )
         return apply_async
 
     def test_kill_switch_skips_pick_and_reschedule(self, monkeypatch, db):

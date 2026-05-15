@@ -103,6 +103,11 @@ def _patch_common(monkeypatch, db):
     monkeypatch.setattr(
         "bot.tasks.auto_comment_next.apply_async", apply_async
     )
+    # Phase L-3 — bypass Redis fire-lock in dry-run tests (these predate L-3
+    # and aren't testing the lock; they're testing the dry-run branch).
+    monkeypatch.setattr(
+        "bot.tasks._acquire_auto_comment_fire_lock", lambda: True
+    )
     return apply_async
 
 
