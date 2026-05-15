@@ -838,8 +838,51 @@ def scan_watchdog():  # noqa: ANN201
     from server.models import ScannerRun
 
     max_idle = int(os.getenv("SCAN_MAX_IDLE_SECONDS", "1800"))  # 30 min default
+    # Phase L-2 — reap zombie 'running' rows older than this threshold.
+    # Worker crashes mid-scan (Block detected, OOM, kill -9) leave the row
+    # stuck and the L-1 inflight guard would refuse to start fresh scans.
+    running_timeout = int(
+        os.getenv("SCAN_RUNNING_TIMEOUT_SECONDS", "600")
+    )  # 10 min default — generous vs realistic 2-3 min scans
 
     with _db_session() as db:
+        # Phase L-2: reap zombie running rows BEFORE deciding chain health.
+        zombie_cutoff = datetime.now(timezone.utc) - timedelta(
+            seconds=running_timeout
+        )
+        zombies = (
+            db.query(ScannerRun)
+            .filter(ScannerRun.status == "running")
+            .filter(ScannerRun.started_at < zombie_cutoff)
+            .all()
+        )
+        if zombies:
+            now = datetime.now(timezone.utc)
+            for zombie in zombies:
+                logger.warning(
+                    "scan_watchdog: reaping zombie ScannerRun id=%s "
+                    "(started_at=%s, age=%.1fs > %ds)",
+                    zombie.id,
+                    zombie.started_at,
+                    (now - zombie.started_at.replace(
+                        tzinfo=timezone.utc
+                        if zombie.started_at.tzinfo is None
+                        else zombie.started_at.tzinfo
+                    )).total_seconds()
+                    if zombie.started_at
+                    else -1,
+                    running_timeout,
+                )
+                zombie.status = "failed"
+                zombie.aborted_reason = "watchdog_zombie_reap"
+                zombie.finished_at = now
+                if not zombie.error_message:
+                    zombie.error_message = (
+                        f"reaped by watchdog after {running_timeout}s without finalize"
+                    )
+            db.commit()
+
+        # Re-query AFTER reaping so we see the post-reap state.
         running = (
             db.query(ScannerRun)
             .filter(ScannerRun.status == "running")
