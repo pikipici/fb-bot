@@ -311,7 +311,7 @@ class TestAutoCommentNext:
         )
 
         # Stub send_comment to raise CookieExpiredError.
-        from bot.modules.comment_sender import CookieExpiredError
+        from bot.modules.source_collector import CookieExpiredError
 
         async def _raise(**_kwargs):
             raise CookieExpiredError("login wall")
@@ -365,8 +365,14 @@ class TestAutoCommentNext:
 
         from bot.modules.comment_sender import SendResult
 
-        async def _ok(**_kwargs):
-            return SendResult(success=True, comment_id="fb_c_123", error=None)
+        async def _ok(**kwargs):
+            return SendResult(
+                success=True,
+                comment_text=kwargs.get("comment_text", ""),
+                post_url=kwargs.get("post_url", ""),
+                fb_comment_id="fb_c_123",
+                error=None,
+            )
 
         monkeypatch.setattr("bot.tasks.send_comment", _ok)
 

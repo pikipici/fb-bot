@@ -1220,7 +1220,7 @@ def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
                     trending_post_id=post_id,
                     comment_text=draft,
                     user_id=None,
-                    fb_comment_id=getattr(send_result, "comment_id", None),
+                    fb_comment_id=getattr(send_result, "fb_comment_id", None),
                     status="SENT",
                 )
             except Exception as exc:  # noqa: BLE001
