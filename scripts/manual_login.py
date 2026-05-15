@@ -36,7 +36,7 @@ if str(ROOT) not in sys.path:
 from playwright.async_api import async_playwright
 
 from bot.modules.browser_profile import get_profile_path
-from bot.modules.fb_session import create_persistent_session_context
+from bot.modules.fb_session import create_persistent_session
 
 
 FB_HOME = "https://www.facebook.com/"
@@ -54,10 +54,10 @@ async def amain() -> int:
     async with async_playwright() as pw:
         # Pakai launcher yang sama dengan production scan path biar
         # fingerprint identik (UA, viewport, locale, tz, stealth init).
-        context = await create_persistent_session_context(
+        context = await create_persistent_session(
             pw,
             account_id=account_id,
-            cookies=None,        # don't bootstrap from DB; profile is authoritative
+            cookies={},          # don't bootstrap from DB; profile is authoritative
             headless=False,      # MUST be False; user needs to see + interact
         )
 
