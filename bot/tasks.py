@@ -881,6 +881,9 @@ def scan_watchdog():  # noqa: ANN201
                         f"reaped by watchdog after {running_timeout}s without finalize"
                     )
             db.commit()
+            zombie_count = len(zombies)
+        else:
+            zombie_count = 0
 
         # Re-query AFTER reaping so we see the post-reap state.
         running = (
@@ -900,6 +903,22 @@ def scan_watchdog():  # noqa: ANN201
             .order_by(ScannerRun.id.desc())
             .first()
         )
+
+    # Phase L-2 — if we just reaped a zombie, the chain broke (worker died
+    # mid-scan, never re-armed). Kick a fresh scan immediately so the chain
+    # restarts. Without this we'd see "fresh" finished_at from the reap and
+    # falsely skip below.
+    if zombie_count > 0:
+        logger.info(
+            "scan_watchdog: reaped %d zombie(s), kicking fresh scan",
+            zombie_count,
+        )
+        scan_all_sources.apply_async(kwargs={"trigger": "watchdog"})
+        return {
+            "action": "kick",
+            "reason": "zombie_reaped",
+            "reaped": zombie_count,
+        }
 
     if last is None:
         logger.info("scan_watchdog: no ScannerRun history, kicking bootstrap")
