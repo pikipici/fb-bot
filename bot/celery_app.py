@@ -46,7 +46,22 @@ def _collect_interval() -> int:
 
 
 def _scan_interval() -> int:
-    return int(os.getenv("SCAN_INTERVAL_SECONDS", "1800"))  # 30 min default (Phase I-D)
+    return int(os.getenv("SCAN_INTERVAL_SECONDS", "1800"))  # 30 min default (Phase I-D legacy)
+
+
+def _scan_min_interval() -> int:
+    """Phase J — minimum random countdown for self-rescheduling scan chain."""
+    return int(os.getenv("SCAN_MIN_INTERVAL_SECONDS", "600"))  # 10 min default
+
+
+def _scan_max_interval() -> int:
+    """Phase J — maximum random countdown for self-rescheduling scan chain."""
+    return int(os.getenv("SCAN_MAX_INTERVAL_SECONDS", "1500"))  # 25 min default
+
+
+def _scan_watchdog_interval() -> int:
+    """Phase J — beat tick for ``scan_watchdog`` safety-net task."""
+    return int(os.getenv("SCAN_WATCHDOG_INTERVAL_SECONDS", "300"))  # 5 min default
 
 
 def _health_interval() -> int:
@@ -71,9 +86,13 @@ app.conf.update(
             "task": "bot.tasks.collect_all_targets",
             "schedule": _collect_interval(),
         },
-        "scan-all-sources": {
-            "task": "bot.tasks.scan_all_sources",
-            "schedule": _scan_interval(),
+        "scan-watchdog": {
+            # Phase J — beat no longer drives scan_all_sources directly.
+            # The task self-reschedules with random.uniform(min, max) countdown
+            # in its own body. Watchdog re-arms a stale chain (worker crash,
+            # broker hiccup, fresh deploy) every few minutes.
+            "task": "bot.tasks.scan_watchdog",
+            "schedule": _scan_watchdog_interval(),
         },
         "health-check": {
             "task": "bot.tasks.health_check",
