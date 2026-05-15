@@ -910,6 +910,37 @@ def _enqueue_next_comment(*, source: str = "selfsched") -> float | None:
     return countdown
 
 
+def _record_comment_draft(
+    db: Session,
+    *,
+    post_id: int,
+    comment_text: str,
+) -> None:
+    """Phase K-5 — insert a DRAFT CommentHistory row for dry-run mode.
+
+    Defensive: never raises (audit trail is best-effort). Used by the
+    dry-run branch in ``auto_comment_next`` so the AI output can be
+    reviewed offline. Post status is left untouched (NEW); natural dedup
+    happens via the CommentHistory join in
+    ``AutoCommentService.pick_next_eligible_post``.
+    """
+    from server.models import CommentHistory
+
+    try:
+        row = CommentHistory(
+            trending_post_id=post_id,
+            comment_text=comment_text or "",
+            status="DRAFT",
+            error_message=None,
+        )
+        db.add(row)
+        db.commit()
+    except Exception:  # noqa: BLE001 — never let audit failure mask task result
+        logger.exception(
+            "failed to record auto-comment draft for post=%s", post_id
+        )
+
+
 def _record_comment_failure(
     db: Session,
     *,
@@ -961,6 +992,10 @@ def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
       3. Pre-check rate limit → ``rate_limited`` skip + reschedule.
       4. Pick ACTIVE FB account → ``no_account`` skip + reschedule.
       5. Generate AI draft → on error, record FAILED + flip post SKIPPED.
+      5b. DRY-RUN (Phase K-5): if ``AUTO_COMMENT_DRY_RUN=1`` → record
+          DRAFT + return ``{action: 'draft'}``. Send is skipped entirely,
+          quota is not burned, post stays NEW (CommentHistory join still
+          dedups it on next tick).
       6. Send via Playwright → on cookie expire, flip account EXPIRED;
          on other error, flip post SKIPPED.
       7. On success → record_send SENT (post auto-flips COMMENTED).
@@ -1088,6 +1123,27 @@ def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
                     "action": "failed",
                     "reason": "ai_draft_error",
                     "post_id": post_id,
+                }
+                return result
+
+            # 4b. Phase K-5 — dry-run branch: skip Playwright send, log DRAFT.
+            from bot.celery_app import _auto_comment_dry_run
+
+            if _auto_comment_dry_run():
+                logger.info(
+                    "auto_comment_next: DRY_RUN post=%s draft_len=%d "
+                    "(send_comment skipped, AI quality validation mode)",
+                    post_id,
+                    len(draft),
+                )
+                _record_comment_draft(
+                    db, post_id=post_id, comment_text=draft
+                )
+                result = {
+                    "action": "draft",
+                    "reason": "dry_run",
+                    "post_id": post_id,
+                    "draft": draft,
                 }
                 return result
 

@@ -79,6 +79,22 @@ def _auto_comment_watchdog_interval() -> int:
     return int(os.getenv("AUTO_COMMENT_WATCHDOG_INTERVAL_SECONDS", "300"))  # 5 min default
 
 
+def _auto_comment_dry_run() -> bool:
+    """Phase K-5 — shadow-mode toggle for the auto-comment pipeline.
+
+    When True, ``auto_comment_next`` runs the full lifecycle EXCEPT the
+    Playwright send_comment() call. The AI draft is still generated (so
+    quality can be reviewed) and persisted to ``CommentHistory`` with
+    ``status='DRAFT'``. This lets the operator validate AI output without
+    touching the FB account.
+
+    Defensive default: anything other than the literal string ``"1"`` is
+    treated as live mode. Better to ship a live comment by accident than
+    to silently swallow real ones.
+    """
+    return os.getenv("AUTO_COMMENT_DRY_RUN", "") == "1"
+
+
 def _health_interval() -> int:
     return int(os.getenv("HEALTH_INTERVAL_SECONDS", "300"))  # 5 min default
 
