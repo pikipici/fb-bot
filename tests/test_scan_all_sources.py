@@ -383,3 +383,251 @@ class TestScanAllSourcesLogic:
         assert fresh.get("xs") == "ROTATED"
         # Status untouched.
         assert account_with_cookies.status == original_status
+
+
+# ---------------------------------------------------------------------------
+# Phase J — self-rescheduling task chain.
+# ---------------------------------------------------------------------------
+
+
+class TestEnqueueNextScan:
+    """Phase J-2 — ``_enqueue_next_scan`` picks a random countdown and
+    re-enqueues ``scan_all_sources`` via celery's ``apply_async``.
+
+    The rationale is that beat no longer drives the scanner directly; each
+    finished scan picks its own delay so FB anti-bot can't track a fixed
+    inter-scan delta.
+    """
+
+    def test_returns_countdown_in_configured_range(self, monkeypatch):
+        """Sample 50 calls — every result must land in [MIN, MAX]."""
+        from bot.tasks import _enqueue_next_scan
+
+        monkeypatch.setenv("SCAN_MIN_INTERVAL_SECONDS", "600")
+        monkeypatch.setenv("SCAN_MAX_INTERVAL_SECONDS", "1500")
+        monkeypatch.delenv("SCAN_SELFSCHED_DISABLED", raising=False)
+
+        # Stub apply_async so we don't touch the broker.
+        apply_async = MagicMock()
+        monkeypatch.setattr(
+            "bot.tasks.scan_all_sources.apply_async", apply_async
+        )
+
+        samples = [_enqueue_next_scan() for _ in range(50)]
+        assert all(s is not None for s in samples)
+        assert all(600 <= s <= 1500 for s in samples), samples
+
+    def test_dispatches_via_apply_async_with_selfsched_trigger(
+        self, monkeypatch
+    ):
+        from bot.tasks import _enqueue_next_scan
+
+        monkeypatch.delenv("SCAN_SELFSCHED_DISABLED", raising=False)
+        apply_async = MagicMock()
+        monkeypatch.setattr(
+            "bot.tasks.scan_all_sources.apply_async", apply_async
+        )
+
+        countdown = _enqueue_next_scan()
+        apply_async.assert_called_once()
+        kwargs = apply_async.call_args.kwargs
+        assert kwargs["kwargs"] == {"trigger": "selfsched"}
+        assert kwargs["countdown"] == countdown
+
+    def test_disabled_via_env_returns_none_and_skips_dispatch(
+        self, monkeypatch
+    ):
+        from bot.tasks import _enqueue_next_scan
+
+        monkeypatch.setenv("SCAN_SELFSCHED_DISABLED", "1")
+        apply_async = MagicMock()
+        monkeypatch.setattr(
+            "bot.tasks.scan_all_sources.apply_async", apply_async
+        )
+
+        result = _enqueue_next_scan()
+        assert result is None
+        apply_async.assert_not_called()
+
+    def test_custom_source_label_propagates(self, monkeypatch):
+        """Watchdog kicks pass ``source='watchdog'``."""
+        from bot.tasks import _enqueue_next_scan
+
+        monkeypatch.delenv("SCAN_SELFSCHED_DISABLED", raising=False)
+        apply_async = MagicMock()
+        monkeypatch.setattr(
+            "bot.tasks.scan_all_sources.apply_async", apply_async
+        )
+
+        _enqueue_next_scan(source="watchdog")
+        kwargs = apply_async.call_args.kwargs
+        assert kwargs["kwargs"] == {"trigger": "watchdog"}
+
+
+class TestScanAllSourcesSelfReschedules:
+    """Phase J-2 — ``scan_all_sources`` body wires ``_enqueue_next_scan``
+    after finalize, both happy and crash paths."""
+
+    def test_success_path_enqueues_next(self, monkeypatch, db, account_with_cookies):
+        from bot import tasks
+
+        # Stub the heavy lifting — we only care about the wire-up.
+        monkeypatch.setattr(
+            "bot.tasks._run_scan_all_sources",
+            lambda _db: {"aborted": False, "successful_scans": 1},
+        )
+        monkeypatch.setattr(
+            "bot.tasks._finalize_scanner_run", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "bot.tasks._db_session", lambda: _ctx_session(db)
+        )
+
+        enqueue = MagicMock(return_value=900.0)
+        monkeypatch.setattr("bot.tasks._enqueue_next_scan", enqueue)
+
+        # Use the underlying function rather than the celery wrapper for unit
+        # isolation — bind=True means real call needs a self-like object,
+        # but we can call the underlying via tasks.scan_all_sources.run.
+        tasks.scan_all_sources.run(trigger="manual")
+
+        enqueue.assert_called_once()
+
+    def test_exception_path_still_enqueues_next(
+        self, monkeypatch, db, account_with_cookies
+    ):
+        from bot import tasks
+
+        def _boom(_db):
+            raise RuntimeError("simulated scanner crash")
+
+        monkeypatch.setattr("bot.tasks._run_scan_all_sources", _boom)
+        monkeypatch.setattr(
+            "bot.tasks._finalize_scanner_run", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "bot.tasks._db_session", lambda: _ctx_session(db)
+        )
+
+        enqueue = MagicMock(return_value=750.0)
+        monkeypatch.setattr("bot.tasks._enqueue_next_scan", enqueue)
+
+        result = tasks.scan_all_sources.run(trigger="manual")
+
+        # Crash should be caught + reported, not raised.
+        assert result["aborted"] is True
+        # And next cycle still gets queued so chain doesn't dead-end.
+        enqueue.assert_called_once()
+
+
+class TestScannerRunTriggerWhitelist:
+    """Phase J — ``trigger`` whitelist expanded to accept ``selfsched`` and
+    ``watchdog`` in addition to legacy ``beat`` / ``manual``.
+
+    This is asserted by inspecting the value persisted on ``ScannerRun.trigger``.
+    """
+
+    def test_selfsched_trigger_persisted(
+        self, monkeypatch, db, account_with_cookies
+    ):
+        from bot import tasks
+        from server.models import ScannerRun
+
+        monkeypatch.setattr(
+            "bot.tasks._run_scan_all_sources",
+            lambda _db: {"aborted": False, "successful_scans": 0},
+        )
+        monkeypatch.setattr(
+            "bot.tasks._finalize_scanner_run", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "bot.tasks._db_session", lambda: _ctx_session(db)
+        )
+        monkeypatch.setattr(
+            "bot.tasks._enqueue_next_scan", MagicMock(return_value=900.0)
+        )
+
+        tasks.scan_all_sources.run(trigger="selfsched")
+
+        row = (
+            db.query(ScannerRun)
+            .order_by(ScannerRun.id.desc())
+            .first()
+        )
+        assert row is not None
+        assert row.trigger == "selfsched"
+
+    def test_watchdog_trigger_persisted(
+        self, monkeypatch, db, account_with_cookies
+    ):
+        from bot import tasks
+        from server.models import ScannerRun
+
+        monkeypatch.setattr(
+            "bot.tasks._run_scan_all_sources",
+            lambda _db: {"aborted": False, "successful_scans": 0},
+        )
+        monkeypatch.setattr(
+            "bot.tasks._finalize_scanner_run", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "bot.tasks._db_session", lambda: _ctx_session(db)
+        )
+        monkeypatch.setattr(
+            "bot.tasks._enqueue_next_scan", MagicMock(return_value=900.0)
+        )
+
+        tasks.scan_all_sources.run(trigger="watchdog")
+
+        row = (
+            db.query(ScannerRun)
+            .order_by(ScannerRun.id.desc())
+            .first()
+        )
+        assert row is not None
+        assert row.trigger == "watchdog"
+
+    def test_unknown_trigger_falls_back_to_beat(
+        self, monkeypatch, db, account_with_cookies
+    ):
+        from bot import tasks
+        from server.models import ScannerRun
+
+        monkeypatch.setattr(
+            "bot.tasks._run_scan_all_sources",
+            lambda _db: {"aborted": False, "successful_scans": 0},
+        )
+        monkeypatch.setattr(
+            "bot.tasks._finalize_scanner_run", lambda *a, **k: None
+        )
+        monkeypatch.setattr(
+            "bot.tasks._db_session", lambda: _ctx_session(db)
+        )
+        monkeypatch.setattr(
+            "bot.tasks._enqueue_next_scan", MagicMock(return_value=900.0)
+        )
+
+        tasks.scan_all_sources.run(trigger="garbage_value")
+
+        row = (
+            db.query(ScannerRun)
+            .order_by(ScannerRun.id.desc())
+            .first()
+        )
+        assert row is not None
+        assert row.trigger == "beat"
+
+
+def _ctx_session(session):
+    """Return a contextmanager that yields the existing test session.
+
+    Tests above stub ``bot.tasks._db_session`` with this so the task body's
+    ``with _db_session() as db:`` still works on our pre-built sqlite.
+    """
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _cm():
+        yield session
+
+    return _cm()
