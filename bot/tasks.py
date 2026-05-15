@@ -1265,3 +1265,74 @@ def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
             logger.exception(
                 "auto_comment_next: failed to self-reschedule, watchdog will recover"
             )
+
+
+@app.task
+def auto_comment_watchdog():  # noqa: ANN201
+    """Detect a stale auto-comment chain and re-kick if needed.
+
+    Returns ``{action, reason, [idle_seconds]}`` for observability. Mirror
+    of ``scan_watchdog`` (Phase J-3) but for the comment chain.
+
+    Logic:
+      - Kill switch → skip (don't fight the user's pause).
+      - No CommentHistory rows → kick (bootstrap, e.g. fresh deploy).
+      - Last sent_at within ``AUTO_COMMENT_MAX_IDLE_SECONDS`` → skip (fresh).
+      - Otherwise → kick (stale).
+
+    Never raises — defensive against DB hiccups.
+    """
+    if os.getenv("AUTO_COMMENT_DISABLED") == "1":
+        logger.debug("auto_comment_watchdog: kill-switch on, skip")
+        return {"action": "skip", "reason": "kill_switch"}
+
+    from server.models import CommentHistory
+
+    max_idle = int(
+        os.getenv("AUTO_COMMENT_MAX_IDLE_SECONDS", "1800")
+    )  # 30 min default
+
+    with _db_session() as db:
+        last = (
+            db.query(CommentHistory)
+            .order_by(CommentHistory.id.desc())
+            .first()
+        )
+
+    if last is None:
+        logger.info(
+            "auto_comment_watchdog: no CommentHistory, kicking bootstrap"
+        )
+        auto_comment_next.apply_async(kwargs={"trigger": "watchdog"})
+        return {"action": "kick", "reason": "no_history"}
+
+    pivot = last.sent_at
+    if pivot is None:
+        logger.warning(
+            "auto_comment_watchdog: history id=%s has no sent_at, kicking",
+            last.id,
+        )
+        auto_comment_next.apply_async(kwargs={"trigger": "watchdog"})
+        return {"action": "kick", "reason": "malformed"}
+
+    if pivot.tzinfo is None:
+        pivot = pivot.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    idle = (now - pivot).total_seconds()
+
+    if idle > max_idle:
+        logger.info(
+            "auto_comment_watchdog: chain stale (idle=%.1fs > %ds), kicking",
+            idle,
+            max_idle,
+        )
+        auto_comment_next.apply_async(kwargs={"trigger": "watchdog"})
+        return {"action": "kick", "reason": "stale", "idle_seconds": idle}
+
+    logger.debug(
+        "auto_comment_watchdog: chain healthy (idle=%.1fs ≤ %ds), skip",
+        idle,
+        max_idle,
+    )
+    return {"action": "skip", "reason": "fresh", "idle_seconds": idle}
