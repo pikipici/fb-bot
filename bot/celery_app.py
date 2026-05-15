@@ -64,6 +64,21 @@ def _scan_watchdog_interval() -> int:
     return int(os.getenv("SCAN_WATCHDOG_INTERVAL_SECONDS", "300"))  # 5 min default
 
 
+def _auto_comment_min_interval() -> int:
+    """Phase K — minimum random countdown for self-rescheduling comment chain."""
+    return int(os.getenv("AUTO_COMMENT_MIN_INTERVAL_SECONDS", "720"))  # 12 min default
+
+
+def _auto_comment_max_interval() -> int:
+    """Phase K — maximum random countdown for self-rescheduling comment chain."""
+    return int(os.getenv("AUTO_COMMENT_MAX_INTERVAL_SECONDS", "1800"))  # 30 min default
+
+
+def _auto_comment_watchdog_interval() -> int:
+    """Phase K — beat tick for ``auto_comment_watchdog`` safety-net task."""
+    return int(os.getenv("AUTO_COMMENT_WATCHDOG_INTERVAL_SECONDS", "300"))  # 5 min default
+
+
 def _health_interval() -> int:
     return int(os.getenv("HEALTH_INTERVAL_SECONDS", "300"))  # 5 min default
 
@@ -93,6 +108,13 @@ app.conf.update(
             # broker hiccup, fresh deploy) every few minutes.
             "task": "bot.tasks.scan_watchdog",
             "schedule": _scan_watchdog_interval(),
+        },
+        "auto-comment-watchdog": {
+            # Phase K — auto-comment chain follows the same self-rescheduling
+            # pattern as scan. Watchdog re-arms ``auto_comment_next`` if the
+            # chain stalls (worker crash, deploy, kill-switch flipped off).
+            "task": "bot.tasks.auto_comment_watchdog",
+            "schedule": _auto_comment_watchdog_interval(),
         },
         "health-check": {
             "task": "bot.tasks.health_check",
