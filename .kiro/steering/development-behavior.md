@@ -110,11 +110,21 @@ Full suite **825 passed**.
 cookie burn (root cause Playwright pipe deadlock di asyncio loop).
 Phase I cookie hardening **likely fixed** pending re-validation post-M.
 
-**Next step:** Observe Phase M defense ~24h, watch for any
-`aborted_reason='soft_time_limit'` or `'asyncio_timeout'` dari scan/comment
-chain. Kalau muncul → defense kerja, root cause Playwright deadlock
-masih ada (lanjut M-3). Kalau ga muncul → 2 minggu observation kondisi
-stable, baru consider flip `AUTO_COMMENT_DRY_RUN=0` ke live send.
+**Next step:** Observation window Phase M defense — **T0 = 2026-05-18
+12:45 UTC**, target T+24h = **2026-05-19 12:45 UTC**. Watch metrik:
+- `aborted_reason='soft_time_limit'` di ScannerRun (M-1 fired)
+- `aborted_reason='asyncio_timeout'` di ScannerRun (M-2 fired)
+- `action='soft_timeout'` / `'async_timeout'` di auto_comment log
+- Worker process tetap responsive (ga ada zombie py-spy stack lagi)
+- Redis backlog stay near 0 (`redis-cli -p 6382 LLEN celery`)
+- ScannerRun chain konsisten ~10-25 min cadence
+- auto_comment chain konsisten ~12-30 min cadence (DRY_RUN=1 masih aktif)
+
+**JANGAN gas M-3..M-6 dulu** sampe T+24h observation lewat. Kalau muncul
+soft/asyncio timeout → defense kerja, root cause Playwright deadlock
+masih ada → lanjut M-3. Kalau pipeline stable + ga ada timeout fired
+selama 24h → tunggu 1-2 minggu observation baru consider flip
+`AUTO_COMMENT_DRY_RUN=0` ke live send.
 
 ## Activity Log
 

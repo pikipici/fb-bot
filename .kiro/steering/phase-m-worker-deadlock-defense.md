@@ -1,6 +1,6 @@
 # Phase M — Worker Deadlock Defense
 
-**Status:** planning
+**Status:** M-1 + M-2 deployed live (2026-05-18, HEAD `5e601d5`). M-3..M-6 BLOCKED on observation window T+24h ≥ 2026-05-19 12:45 UTC.
 **Goal:** harden worker against Playwright pipe deadlock → process never hangs >15 min, watchdog kills both DB row AND worker process
 **Trigger:** incident 2026-05-16/17 — worker stuck ~40h, 1304 task backlog, pipeline freeze
 **Constraint:** zero behavior change for happy-path, only add bounded timeout + force-kill fallback
