@@ -95,6 +95,27 @@ def _auto_comment_dry_run() -> bool:
     return os.getenv("AUTO_COMMENT_DRY_RUN", "") == "1"
 
 
+def _scan_outer_timeout() -> int:
+    """Phase M-2 — outer ``asyncio.wait_for`` ceiling for scan_all_sources.
+
+    Sits just under M-1 ``soft_time_limit=720`` so the inner timeout
+    fires first and the task can finalize gracefully before Celery
+    raises ``SoftTimeLimitExceeded``. Hard ``time_limit=900`` is the
+    last-resort safety net (M-1).
+    """
+    return int(os.getenv("SCAN_OUTER_TIMEOUT_SECONDS", "720"))
+
+
+def _comment_outer_timeout() -> int:
+    """Phase M-2 — outer ``asyncio.wait_for`` ceiling for auto_comment send.
+
+    Wraps the Playwright ``send_comment`` call. Tighter than scan because
+    a single comment shouldn't take more than a few minutes even on
+    slow networks.
+    """
+    return int(os.getenv("COMMENT_OUTER_TIMEOUT_SECONDS", "420"))
+
+
 def _health_interval() -> int:
     return int(os.getenv("HEALTH_INTERVAL_SECONDS", "300"))  # 5 min default
 

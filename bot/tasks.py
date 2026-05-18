@@ -26,6 +26,7 @@ from bot.modules.orchestrator import Orchestrator
 from bot.modules.parser import Parser
 from bot.modules.rate_guard import RateGuard
 from bot.modules.scheduler import TargetScheduler
+from celery.exceptions import SoftTimeLimitExceeded
 from bot.modules.comment_sender import (
     CheckpointRequiredError,
     CommentSendError,
@@ -610,14 +611,23 @@ def _run_scan_all_sources(db: Session) -> dict[str, Any]:
             "skipped": 0,
         }
 
+    from bot.celery_app import _scan_outer_timeout
+
+    # Phase M-2 — bound the Playwright run with an asyncio outer timeout
+    # so a wedged FB pipe / frozen Chromium can't park the worker forever.
+    # asyncio.TimeoutError propagates up to scan_all_sources where it's
+    # caught and finalized as ``aborted_reason='asyncio_timeout'``.
     results, cookie_expired = asyncio.run(
-        _scan_enabled_sources(
-            sources,
-            cookies,
-            user_agent=pinned_ua,
-            viewport=pinned_viewport,
-            on_cookies_refresh=_make_cookie_refresh_callback(db, account.id),
-            account_id=account.id,
+        asyncio.wait_for(
+            _scan_enabled_sources(
+                sources,
+                cookies,
+                user_agent=pinned_ua,
+                viewport=pinned_viewport,
+                on_cookies_refresh=_make_cookie_refresh_callback(db, account.id),
+                account_id=account.id,
+            ),
+            timeout=_scan_outer_timeout(),
         )
     )
 
@@ -670,7 +680,18 @@ def _run_scan_all_sources(db: Session) -> dict[str, Any]:
     return summary
 
 
-@app.task(bind=True, max_retries=2, default_retry_delay=60)
+@app.task(
+    bind=True,
+    max_retries=2,
+    default_retry_delay=60,
+    # Phase M-1 — hard SIGKILL after 15 min, soft SoftTimeLimitExceeded
+    # after 12 min so the task can finalize ScannerRun + reschedule
+    # before Celery kills the worker. Defends against Playwright pipe
+    # deadlock that bypasses Phase L-2 watchdog (which only fixes the DB
+    # row, not the worker process).
+    time_limit=900,
+    soft_time_limit=720,
+)
 def scan_all_sources(self, trigger: str = "beat"):  # noqa: ANN001
     """Celery beat task — scan every enabled source, upsert trending posts.
 
@@ -744,6 +765,52 @@ def scan_all_sources(self, trigger: str = "beat"):  # noqa: ANN001
     try:
         with _db_session() as db:
             summary = _run_scan_all_sources(db)
+    except asyncio.TimeoutError:
+        # Phase M-2 — outer asyncio.wait_for ceiling (default 720s) fired
+        # before SoftTimeLimitExceeded (M-1, 720s soft / 900s hard).
+        # Graceful unwind: finalize ScannerRun, reschedule chain.
+        logger.warning(
+            "scan_all_sources asyncio outer timeout (run_id=%s) "
+            "— finalizing + resched",
+            run_id,
+        )
+        _finalize_scanner_run(
+            run_id,
+            status="failed",
+            summary={"reason": "asyncio_timeout"},
+            error_message="asyncio outer timeout exceeded",
+        )
+        try:
+            _enqueue_next_scan()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "scan_all_sources reschedule failed (post-asyncio-timeout)"
+            )
+        return {"aborted": True, "reason": "asyncio_timeout"}
+    except SoftTimeLimitExceeded:
+        # Phase M-1 — Celery raised SoftTimeLimitExceeded (default 12 min
+        # for scan). Finalize the row explicitly with
+        # ``aborted_reason='soft_time_limit'`` so dashboard ops can
+        # distinguish it from generic crashes, then reschedule. Hard
+        # ``time_limit`` (15 min) will SIGKILL the worker if we can't
+        # unwind in time, but most graceful unwinds finish well under.
+        logger.warning(
+            "scan_all_sources soft timeout (run_id=%s) — finalizing + resched",
+            run_id,
+        )
+        _finalize_scanner_run(
+            run_id,
+            status="failed",
+            summary={"reason": "soft_time_limit"},
+            error_message="celery soft_time_limit exceeded",
+        )
+        try:
+            _enqueue_next_scan()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "scan_all_sources reschedule failed (post-soft-timeout)"
+            )
+        return {"aborted": True, "reason": "soft_time_limit"}
     except Exception as exc:  # noqa: BLE001
         logger.exception("scan_all_sources crashed: %s", exc)
         _finalize_scanner_run(
@@ -1119,7 +1186,13 @@ def _record_comment_failure(
         )
 
 
-@app.task
+@app.task(
+    # Phase M-1 — hard SIGKILL after 10 min, soft SoftTimeLimitExceeded
+    # after 8 min. auto_comment_next is single-post (no multi-source loop)
+    # so timeouts can be tighter than scan_all_sources.
+    time_limit=600,
+    soft_time_limit=480,
+)
 def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
     """Pick + draft + send one auto-comment, then reschedule next.
 
@@ -1315,16 +1388,25 @@ def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
 
             # 6. Send comment via Playwright
             try:
+                from bot.celery_app import _comment_outer_timeout
+
+                # Phase M-2 — bound the Playwright send_comment with an
+                # asyncio outer timeout (default 420s). Tighter than
+                # scan because a single comment shouldn't take that
+                # long even on slow networks.
                 send_result = asyncio.run(
-                    send_comment(
-                        post_url=post_url,
-                        comment_text=draft,
-                        cookies=cookies,
-                        display_name=display_name,
-                        user_agent=pinned_ua,
-                        viewport={"width": pinned_w, "height": pinned_h},
-                        on_cookies_refresh=refresh_cb,
-                        account_id=account_id,
+                    asyncio.wait_for(
+                        send_comment(
+                            post_url=post_url,
+                            comment_text=draft,
+                            cookies=cookies,
+                            display_name=display_name,
+                            user_agent=pinned_ua,
+                            viewport={"width": pinned_w, "height": pinned_h},
+                            on_cookies_refresh=refresh_cb,
+                            account_id=account_id,
+                        ),
+                        timeout=_comment_outer_timeout(),
                     )
                 )
             except CookieExpiredError as exc:
@@ -1469,6 +1551,24 @@ def auto_comment_next(trigger: str = "selfsched"):  # noqa: ANN201
                 "draft": draft,
             }
             return result
+    except asyncio.TimeoutError:
+        # Phase M-2 — outer asyncio.wait_for ceiling (default 420s) fired
+        # before SoftTimeLimitExceeded (M-1, 480s soft / 600s hard).
+        # finally-block still reschedules the chain.
+        logger.warning(
+            "auto_comment_next: asyncio outer timeout — finalizing + resched"
+        )
+        return {"action": "async_timeout", "reason": "asyncio_timeout"}
+    except SoftTimeLimitExceeded:
+        # Phase M-1 — Celery raised SoftTimeLimitExceeded (default 8 min
+        # for auto_comment_next). Flag the result explicitly so dashboard
+        # ops can spot it; finally-block still reschedules the chain.
+        # Hard ``time_limit`` (10 min) hits ~2 min later → SIGKILL if
+        # we can't unwind.
+        logger.warning(
+            "auto_comment_next: soft timeout — finalizing + resched"
+        )
+        return {"action": "soft_timeout", "reason": "soft_time_limit"}
     finally:
         # Phase K — always reschedule (kill-switch already returned above).
         try:
